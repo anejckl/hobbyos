@@ -42,6 +42,9 @@ C_SRCS = kernel/kernel.c \
          kernel/scheduler/scheduler.c \
          kernel/syscall/syscall.c \
          kernel/user_programs.c \
+         kernel/elf/elf_loader.c \
+         kernel/fs/vfs.c \
+         kernel/fs/ramfs.c \
          kernel/drivers/vga.c \
          kernel/drivers/keyboard.c \
          kernel/drivers/pit.c \
@@ -84,13 +87,9 @@ user/%.o: user/%.c user/syscall.h
 user/%.elf: user/%.o user/user.ld
 	$(LD) -T user/user.ld -nostdlib -o $@ $<
 
-# Convert ELF to flat binary
-user/%.bin: user/%.elf
-	$(OBJCOPY) -O binary $< $@
-
-# Embed flat binary as ELF .rodata object (cd to user/ so symbols are _binary_<name>_bin_*)
-user/%_embed.o: user/%.bin
-	cd user && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 $*.bin $*_embed.o
+# Embed ELF directly as .rodata object (cd to user/ so symbols are _binary_<name>_elf_*)
+user/%_embed.o: user/%.elf
+	cd user && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 $*.elf $*_embed.o
 
 iso: $(KERNEL_BIN)
 	mkdir -p $(ISO_DIR)/boot/grub
@@ -110,7 +109,7 @@ debug: iso
 
 # Host-side unit tests (fast, no QEMU needed)
 test-host:
-	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_printf.c -Itests -Wall -Wextra
+	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_printf.c tests/test_elf.c tests/test_vfs.c -Itests -Wall -Wextra
 	./tests/run_tests
 
 # QEMU smoke test (boots kernel, checks serial output)
@@ -129,4 +128,5 @@ install-hooks:
 clean:
 	rm -f $(OBJS) $(KERNEL_BIN) $(ISO) tests/run_tests tests/serial_output.log
 	rm -f user/*.o user/*.elf user/*.bin
+	rm -f kernel/elf/*.o kernel/fs/*.o
 	rm -rf $(ISO_DIR)

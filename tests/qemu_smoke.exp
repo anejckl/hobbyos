@@ -12,4 +12,6 @@ VMM initialized
 Kernel heap initialized
 Process subsystem initialized
 Scheduler initialized
+VFS initialized
+RAMFS mounted
 Interrupts enabled

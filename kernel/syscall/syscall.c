@@ -2,6 +2,9 @@
 #include "../arch/x86_64/isr.h"
 #include "../drivers/vga.h"
 #include "../scheduler/scheduler.h"
+#include "../process/user_process.h"
+#include "../fs/ramfs.h"
+#include "../string.h"
 #include "../debug/debug.h"
 
 /* Syscall handler for INT 0x80 */
@@ -52,6 +55,35 @@ static void syscall_handler(struct interrupt_frame *frame) {
     case SYS_GETPID: {
         struct process *cur = scheduler_get_current();
         frame->rax = (uint64_t)cur->pid;
+        return;
+    }
+
+    case SYS_EXEC: {
+        /* sys_exec(path) — path is a user-space string */
+        const char *path = (const char *)arg1;
+
+        /* Validate pointer is in user space */
+        if ((uint64_t)path >= KERNEL_VMA) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        /* Look up program in RAMFS */
+        uint64_t prog_size = 0;
+        const uint8_t *prog_data = ramfs_get_file_data(path, &prog_size);
+        if (!prog_data) {
+            debug_printf("syscall: exec '%s' not found\n", path);
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        /* Create new process from ELF data */
+        if (user_process_create(path, prog_data, prog_size) < 0) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        frame->rax = 0;
         return;
     }
 

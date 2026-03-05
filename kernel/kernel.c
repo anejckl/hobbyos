@@ -15,6 +15,9 @@
 #include "syscall/syscall.h"
 #include "shell/shell.h"
 #include "debug/debug.h"
+#include "fs/vfs.h"
+#include "fs/ramfs.h"
+#include "user_programs.h"
 
 /* Multiboot2 constants */
 #define MULTIBOOT2_MAGIC 0x36D76289
@@ -102,6 +105,16 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
     syscall_init();
     vga_printf("[OK] Syscall handler registered\n");
     debug_printf("Syscall handler registered\n");
+
+    /* Filesystem */
+    vfs_init();
+    vga_printf("[OK] VFS initialized\n");
+
+    ramfs_init();
+    vga_printf("[OK] RAMFS mounted\n");
+
+    user_programs_populate_ramfs();
+    vga_printf("[OK] User programs loaded into RAMFS\n");
 
     /* Enable interrupts */
     sti();

@@ -13,4 +13,7 @@ struct user_program {
  * Returns pointer to program info, or NULL if not found. */
 const struct user_program *user_programs_find(const char *name);
 
+/* Populate the RAMFS with all embedded user programs. */
+void user_programs_populate_ramfs(void);
+
 #endif /* USER_PROGRAMS_H */

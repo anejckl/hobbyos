@@ -9,6 +9,8 @@
 #include "../scheduler/scheduler.h"
 #include "../process/user_process.h"
 #include "../user_programs.h"
+#include "../fs/vfs.h"
+#include "../fs/ramfs.h"
 #include "../debug/debug.h"
 
 #define CMD_BUFFER_SIZE 256
@@ -31,6 +33,7 @@ static void cmd_uptime(int argc, char **argv);
 static void cmd_echo(int argc, char **argv);
 static void cmd_clear(int argc, char **argv);
 static void cmd_run(int argc, char **argv);
+static void cmd_ls(int argc, char **argv);
 
 static struct command commands[] = {
     {"help",   "Show available commands",     cmd_help},
@@ -40,6 +43,7 @@ static struct command commands[] = {
     {"echo",   "Print arguments to screen",   cmd_echo},
     {"clear",  "Clear the screen",            cmd_clear},
     {"run",    "Run a user program",          cmd_run},
+    {"ls",     "List files in RAMFS",         cmd_ls},
     {NULL, NULL, NULL}
 };
 
@@ -105,23 +109,37 @@ static void cmd_clear(int argc, char **argv) {
 static void cmd_run(int argc, char **argv) {
     if (argc < 2) {
         vga_printf("Usage: run <program>\n");
-        vga_printf("Available: hello, counter\n");
+        vga_printf("Use 'ls' to list available programs.\n");
         return;
     }
 
-    const struct user_program *prog = user_programs_find(argv[1]);
-    if (!prog) {
-        vga_printf("Unknown program: %s\n", argv[1]);
-        vga_printf("Available: hello, counter\n");
+    uint64_t prog_size = 0;
+    const uint8_t *prog_data = ramfs_get_file_data(argv[1], &prog_size);
+    if (!prog_data) {
+        vga_printf("Program not found: %s\n", argv[1]);
         return;
     }
 
-    if (user_process_create(argv[1], prog->data, prog->size) < 0) {
+    if (user_process_create(argv[1], prog_data, prog_size) < 0) {
         vga_printf("Failed to create user process\n");
         return;
     }
 
     vga_printf("Started '%s' as user process\n", argv[1]);
+}
+
+static void cmd_ls(int argc, char **argv) {
+    (void)argc; (void)argv;
+    char name[VFS_MAX_NAME];
+    uint32_t index = 0;
+
+    while (vfs_readdir("/", index, name, sizeof(name)) == 0) {
+        vga_printf("  %s\n", name);
+        index++;
+    }
+
+    if (index == 0)
+        vga_printf("  (empty)\n");
 }
 
 static void shell_readline(char *buf, size_t size) {

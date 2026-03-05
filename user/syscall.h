@@ -14,6 +14,7 @@ typedef uint64_t           size_t;
 #define SYS_WRITE   0
 #define SYS_EXIT    1
 #define SYS_GETPID  2
+#define SYS_EXEC    3
 
 static inline uint64_t syscall3(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3) {
     uint64_t ret;
@@ -53,6 +54,10 @@ static inline void sys_exit(int status) {
 
 static inline uint64_t sys_getpid(void) {
     return syscall0(SYS_GETPID);
+}
+
+static inline int64_t sys_exec(const char *path) {
+    return (int64_t)syscall1(SYS_EXEC, (uint64_t)path);
 }
 
 #endif /* USER_SYSCALL_H */

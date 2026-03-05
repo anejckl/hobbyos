@@ -23,6 +23,12 @@ int main(void) {
     test_printf_suite();
     printf("\n");
 
+    test_elf_suite();
+    printf("\n");
+
+    test_vfs_suite();
+    printf("\n");
+
     printf("=======================\n");
     printf("Results: %d passed, %d failed, %d total\n",
            tests_passed, tests_failed, tests_passed + tests_failed);
