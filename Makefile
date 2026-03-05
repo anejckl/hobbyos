@@ -77,7 +77,7 @@ debug: iso
 
 # Host-side unit tests (fast, no QEMU needed)
 test-host:
-	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_printf.c -Ikernel -Itests -Wall -Wextra
+	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_printf.c -Itests -Wall -Wextra
 	./tests/run_tests
 
 # QEMU smoke test (boots kernel, checks serial output)

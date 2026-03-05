@@ -1,0 +1,7 @@
+# Force LF line endings in the repository
+* text=auto eol=lf
+
+# Binary files
+*.bin binary
+*.iso binary
+*.o binary
