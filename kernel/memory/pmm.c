@@ -34,6 +34,9 @@ static uint64_t total_pages;
 static uint64_t free_pages;
 static uint64_t max_phys_addr;
 
+/* Per-page reference counts (for COW) */
+static uint8_t *page_refcount;
+
 static inline void bitmap_set(uint64_t page) {
     bitmap[page / 8] |= (1 << (page % 8));
 }
@@ -92,8 +95,14 @@ void pmm_init(uint32_t multiboot_info_phys) {
     bitmap_phys = (bitmap_phys + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);  /* Page-align */
     bitmap = (uint8_t *)PHYS_TO_VIRT(bitmap_phys);
 
+    /* Place refcount array right after bitmap (page-aligned) */
+    uint64_t refcount_phys = bitmap_phys + bitmap_size;
+    refcount_phys = (refcount_phys + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    page_refcount = (uint8_t *)PHYS_TO_VIRT(refcount_phys);
+
     /* Mark ALL pages as used initially */
     memset(bitmap, 0xFF, bitmap_size);
+    memset(page_refcount, 0, total_pages);
     free_pages = 0;
 
     /* Second pass: free available regions from memory map */
@@ -143,10 +152,10 @@ void pmm_init(uint32_t multiboot_info_phys) {
         }
     }
 
-    /* Reserve kernel + bitmap region */
-    uint64_t bitmap_end = bitmap_phys + bitmap_size;
-    bitmap_end = (bitmap_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
-    for (uint64_t addr = 0x100000; addr < bitmap_end; addr += PAGE_SIZE) {
+    /* Reserve kernel + bitmap + refcount region */
+    uint64_t reserve_end = refcount_phys + total_pages;
+    reserve_end = (reserve_end + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    for (uint64_t addr = 0x100000; addr < reserve_end; addr += PAGE_SIZE) {
         uint64_t page = addr / PAGE_SIZE;
         if (!bitmap_test(page)) {
             bitmap_set(page);
@@ -163,6 +172,7 @@ uint64_t pmm_alloc_page(void) {
         if (!bitmap_test(i)) {
             bitmap_set(i);
             free_pages--;
+            page_refcount[i] = 1;
             return i * PAGE_SIZE;
         }
     }
@@ -173,6 +183,7 @@ void pmm_free_page(uint64_t phys_addr) {
     uint64_t page = phys_addr / PAGE_SIZE;
     if (page < total_pages && bitmap_test(page)) {
         bitmap_clear(page);
+        page_refcount[page] = 0;
         free_pages++;
     }
 }
@@ -183,4 +194,28 @@ uint64_t pmm_get_free_pages(void) {
 
 uint64_t pmm_get_total_pages(void) {
     return total_pages;
+}
+
+void pmm_page_ref(uint64_t phys_addr) {
+    uint64_t page = phys_addr / PAGE_SIZE;
+    if (page < total_pages && page_refcount[page] < 255)
+        page_refcount[page]++;
+}
+
+void pmm_page_unref(uint64_t phys_addr) {
+    uint64_t page = phys_addr / PAGE_SIZE;
+    if (page < total_pages && page_refcount[page] > 0) {
+        page_refcount[page]--;
+        if (page_refcount[page] == 0) {
+            bitmap_clear(page);
+            free_pages++;
+        }
+    }
+}
+
+uint8_t pmm_page_refcount(uint64_t phys_addr) {
+    uint64_t page = phys_addr / PAGE_SIZE;
+    if (page < total_pages)
+        return page_refcount[page];
+    return 0;
 }

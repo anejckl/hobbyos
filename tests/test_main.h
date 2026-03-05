@@ -28,6 +28,7 @@ extern int tests_failed;
 /* Suite declarations */
 void test_string_suite(void);
 void test_pmm_suite(void);
+void test_refcount_suite(void);
 void test_printf_suite(void);
 void test_elf_suite(void);
 void test_vfs_suite(void);

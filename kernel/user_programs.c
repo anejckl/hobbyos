@@ -7,6 +7,12 @@ extern const uint8_t _binary_hello_elf_start[];
 extern const uint8_t _binary_hello_elf_end[];
 extern const uint8_t _binary_counter_elf_start[];
 extern const uint8_t _binary_counter_elf_end[];
+extern const uint8_t _binary_fork_test_elf_start[];
+extern const uint8_t _binary_fork_test_elf_end[];
+extern const uint8_t _binary_cow_test_elf_start[];
+extern const uint8_t _binary_cow_test_elf_end[];
+extern const uint8_t _binary_multifork_test_elf_start[];
+extern const uint8_t _binary_multifork_test_elf_end[];
 
 static const struct user_program programs[] = {
     {
@@ -19,22 +25,46 @@ static const struct user_program programs[] = {
         .data = _binary_counter_elf_start,
         .size = 0
     },
+    {
+        .name = "fork_test",
+        .data = _binary_fork_test_elf_start,
+        .size = 0
+    },
+    {
+        .name = "cow_test",
+        .data = _binary_cow_test_elf_start,
+        .size = 0
+    },
+    {
+        .name = "multifork_test",
+        .data = _binary_multifork_test_elf_start,
+        .size = 0
+    },
     { NULL, NULL, 0 }
 };
 
+static uint64_t program_size(const uint8_t *data) {
+    if (data == _binary_hello_elf_start)
+        return (uint64_t)(_binary_hello_elf_end - _binary_hello_elf_start);
+    if (data == _binary_counter_elf_start)
+        return (uint64_t)(_binary_counter_elf_end - _binary_counter_elf_start);
+    if (data == _binary_fork_test_elf_start)
+        return (uint64_t)(_binary_fork_test_elf_end - _binary_fork_test_elf_start);
+    if (data == _binary_cow_test_elf_start)
+        return (uint64_t)(_binary_cow_test_elf_end - _binary_cow_test_elf_start);
+    if (data == _binary_multifork_test_elf_start)
+        return (uint64_t)(_binary_multifork_test_elf_end - _binary_multifork_test_elf_start);
+    return 0;
+}
+
 const struct user_program *user_programs_find(const char *name) {
-    /* Use a static copy so we can fill in computed size */
     static struct user_program result;
 
     for (int i = 0; programs[i].name; i++) {
         if (strcmp(name, programs[i].name) == 0) {
             result.name = programs[i].name;
             result.data = programs[i].data;
-            /* Compute size from linker symbols */
-            if (programs[i].data == _binary_hello_elf_start)
-                result.size = (uint64_t)(_binary_hello_elf_end - _binary_hello_elf_start);
-            else if (programs[i].data == _binary_counter_elf_start)
-                result.size = (uint64_t)(_binary_counter_elf_end - _binary_counter_elf_start);
+            result.size = program_size(programs[i].data);
             return &result;
         }
     }
@@ -43,12 +73,7 @@ const struct user_program *user_programs_find(const char *name) {
 
 void user_programs_populate_ramfs(void) {
     for (int i = 0; programs[i].name; i++) {
-        uint64_t size = 0;
-        if (programs[i].data == _binary_hello_elf_start)
-            size = (uint64_t)(_binary_hello_elf_end - _binary_hello_elf_start);
-        else if (programs[i].data == _binary_counter_elf_start)
-            size = (uint64_t)(_binary_counter_elf_end - _binary_counter_elf_start);
-
-        ramfs_add_file(programs[i].name, programs[i].data, size);
+        ramfs_add_file(programs[i].name, programs[i].data,
+                       program_size(programs[i].data));
     }
 }

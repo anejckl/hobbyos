@@ -44,7 +44,7 @@ static void user_trampoline(void) {
                    GDT_USER_CODE_RPL3, GDT_USER_DATA_RPL3);
 }
 
-int user_process_create(const char *name, const uint8_t *data, uint64_t size) {
+int user_process_create(const char *name, const uint8_t *data, uint64_t size, uint32_t ppid) {
     /* 1. Validate ELF */
     struct elf_load_result elf_result;
     if (elf_validate(data, size) < 0) {
@@ -90,6 +90,7 @@ int user_process_create(const char *name, const uint8_t *data, uint64_t size) {
     proc->is_user = true;
     proc->user_program_data = data;
     proc->user_program_size = size;
+    proc->ppid = ppid;
 
     /* 7. Add to scheduler */
     scheduler_add(proc);

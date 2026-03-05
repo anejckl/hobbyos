@@ -20,6 +20,9 @@ int main(void) {
     test_pmm_suite();
     printf("\n");
 
+    test_refcount_suite();
+    printf("\n");
+
     test_printf_suite();
     printf("\n");
 

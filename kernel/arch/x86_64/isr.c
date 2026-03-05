@@ -52,6 +52,14 @@ void isr_unregister_handler(uint8_t n) {
 void isr_handler(struct interrupt_frame *frame) {
     uint64_t int_no = frame->int_no;
 
+    /* Send EOI BEFORE handler dispatch for hardware interrupts.
+     * This is critical: if a handler calls schedule() and context_switch(),
+     * the EOI would never be sent (until the process is rescheduled),
+     * blocking all lower-priority IRQs (e.g., keyboard blocked by PIT). */
+    if (int_no >= 32 && int_no < 48) {
+        pic_send_eoi((uint8_t)(int_no - 32));
+    }
+
     /* Call registered handler if present */
     if (isr_handlers[int_no]) {
         isr_handlers[int_no](frame);
@@ -71,10 +79,5 @@ void isr_handler(struct interrupt_frame *frame) {
 
         cli();
         for (;;) hlt();
-    }
-
-    /* Send EOI for hardware interrupts (IRQ 0-15 mapped to INT 32-47) */
-    if (int_no >= 32 && int_no < 48) {
-        pic_send_eoi((uint8_t)(int_no - 32));
     }
 }

@@ -1,5 +1,6 @@
 #include "process.h"
 #include "../memory/kheap.h"
+#include "../scheduler/scheduler.h"
 #include "../string.h"
 #include "../debug/debug.h"
 
@@ -38,6 +39,9 @@ struct process *process_create(const char *name, void (*entry)(void)) {
     proc->is_user = false;
     proc->user_program_data = NULL;
     proc->user_program_size = 0;
+    proc->ppid = 0;
+    proc->exit_code = 0;
+    proc->wait_for_pid = 0;
 
     /* Set up initial context so context_switch will "return" to entry */
     memset(&proc->context, 0, sizeof(struct context));
@@ -70,4 +74,88 @@ uint32_t process_get_count(void) {
             count++;
     }
     return count;
+}
+
+struct process *process_find_zombie_child(uint32_t parent_pid) {
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (process_table[i].state == PROCESS_ZOMBIE &&
+            process_table[i].ppid == parent_pid)
+            return &process_table[i];
+    }
+    return NULL;
+}
+
+bool process_has_children(uint32_t parent_pid) {
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (process_table[i].ppid == parent_pid &&
+            process_table[i].state != PROCESS_UNUSED &&
+            process_table[i].state != PROCESS_TERMINATED)
+            return true;
+    }
+    return false;
+}
+
+struct process *process_alloc(void) {
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (process_table[i].state == PROCESS_UNUSED) {
+            memset(&process_table[i], 0, sizeof(struct process));
+            process_table[i].pid = next_pid++;
+            return &process_table[i];
+        }
+    }
+    return NULL;
+}
+
+int process_wait_for(uint32_t child_pid, int32_t *status) {
+    struct process *cur = scheduler_get_current();
+
+    /* Check for zombie child first */
+    struct process *zombie = NULL;
+    if (child_pid == 0)
+        zombie = process_find_zombie_child(cur->pid);
+    else {
+        struct process *child = process_get_by_pid(child_pid);
+        if (child && child->ppid == cur->pid && child->state == PROCESS_ZOMBIE)
+            zombie = child;
+    }
+
+    if (zombie) {
+        uint32_t zpid = zombie->pid;
+        if (status)
+            *status = zombie->exit_code;
+        zombie->state = PROCESS_TERMINATED;
+        return (int)zpid;
+    }
+
+    /* No zombie yet — do we have any living children? */
+    if (!process_has_children(cur->pid))
+        return -1;
+
+    /* Block until a child exits */
+    cur->wait_for_pid = child_pid;
+    cur->state = PROCESS_BLOCKED;
+    schedule();
+
+    /* Re-enable interrupts: we were rescheduled from inside a PIT ISR
+     * (which runs with IF=0), and context_switch doesn't restore RFLAGS. */
+    sti();
+
+    /* Resumed — find and reap the zombie */
+    if (child_pid == 0)
+        zombie = process_find_zombie_child(cur->pid);
+    else {
+        struct process *child = process_get_by_pid(child_pid);
+        if (child && child->ppid == cur->pid && child->state == PROCESS_ZOMBIE)
+            zombie = child;
+    }
+
+    if (zombie) {
+        uint32_t zpid = zombie->pid;
+        if (status)
+            *status = zombie->exit_code;
+        zombie->state = PROCESS_TERMINATED;
+        return (int)zpid;
+    }
+
+    return -1;
 }

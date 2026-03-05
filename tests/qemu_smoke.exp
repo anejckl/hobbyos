@@ -15,3 +15,15 @@ Scheduler initialized
 VFS initialized
 RAMFS mounted
 Interrupts enabled
+# Autotest integration tests
+AUTOTEST: running fork_test
+fork_test: parent PID=
+fork_test: waited, reaped PID=
+AUTOTEST: fork_test exited with status 0
+AUTOTEST: running cow_test
+cow_test: PASS - COW isolation works!
+AUTOTEST: cow_test exited with status 0
+AUTOTEST: running multifork_test
+multifork: all children reaped, done.
+AUTOTEST: multifork_test exited with status 0
+AUTOTEST: all tests passed

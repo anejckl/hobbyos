@@ -40,9 +40,11 @@ char _kernel_phys_end[4096];
  * Bypasses pmm_init() which requires multiboot2 info.
  */
 static uint8_t test_bitmap_storage[4096];
+static uint8_t test_refcount_storage[32768];
 
-static void pmm_test_setup(uint64_t num_pages) {
+void pmm_test_setup(uint64_t num_pages) {
     bitmap = test_bitmap_storage;
+    page_refcount = test_refcount_storage;
     total_pages = num_pages;
     bitmap_size = (num_pages + 7) / 8;
     free_pages = 0;
@@ -50,9 +52,10 @@ static void pmm_test_setup(uint64_t num_pages) {
 
     /* Mark all pages as used */
     memset(bitmap, 0xFF, bitmap_size);
+    memset(page_refcount, 0, num_pages);
 }
 
-static void pmm_test_free_range(uint64_t start_page, uint64_t count) {
+void pmm_test_free_range(uint64_t start_page, uint64_t count) {
     for (uint64_t i = start_page; i < start_page + count && i < total_pages; i++) {
         if (bitmap_test(i)) {
             bitmap_clear(i);

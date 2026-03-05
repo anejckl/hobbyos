@@ -23,6 +23,7 @@ ASM_SRCS = boot/boot.asm \
            kernel/arch/x86_64/idt_flush.asm \
            kernel/arch/x86_64/isr_stubs.asm \
            kernel/arch/x86_64/usermode.asm \
+           kernel/arch/x86_64/fork_return.asm \
            kernel/scheduler/context_switch.asm
 
 C_SRCS = kernel/kernel.c \
@@ -49,14 +50,15 @@ C_SRCS = kernel/kernel.c \
          kernel/drivers/keyboard.c \
          kernel/drivers/pit.c \
          kernel/shell/shell.c \
-         kernel/debug/debug.c
+         kernel/debug/debug.c \
+         kernel/autotest.c
 
 # Object files
 ASM_OBJS = $(ASM_SRCS:.asm=.o)
 C_OBJS = $(C_SRCS:.c=.o)
 
 # User program embedded objects
-USER_PROGRAMS = hello counter
+USER_PROGRAMS = hello counter fork_test cow_test multifork_test
 USER_EMBED_OBJS = $(patsubst %,user/%_embed.o,$(USER_PROGRAMS))
 
 OBJS = $(ASM_OBJS) $(C_OBJS) $(USER_EMBED_OBJS)
@@ -109,7 +111,7 @@ debug: iso
 
 # Host-side unit tests (fast, no QEMU needed)
 test-host:
-	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_printf.c tests/test_elf.c tests/test_vfs.c -Itests -Wall -Wextra
+	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_refcount.c tests/test_printf.c tests/test_elf.c tests/test_vfs.c -Itests -Wall -Wextra
 	./tests/run_tests
 
 # QEMU smoke test (boots kernel, checks serial output)

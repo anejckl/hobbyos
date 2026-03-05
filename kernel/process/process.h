@@ -12,6 +12,7 @@ enum process_state {
     PROCESS_READY,
     PROCESS_RUNNING,
     PROCESS_BLOCKED,
+    PROCESS_ZOMBIE,
     PROCESS_TERMINATED
 };
 
@@ -39,6 +40,9 @@ struct process {
     bool is_user;                /* true if ring 3 process */
     const uint8_t *user_program_data;  /* pointer to embedded program binary */
     uint64_t user_program_size;
+    uint32_t ppid;               /* Parent PID (0 = kernel/init) */
+    int32_t exit_code;           /* From sys_exit() */
+    uint32_t wait_for_pid;       /* If BLOCKED on wait: child PID (0 = any) */
 };
 
 void process_init(void);
@@ -46,5 +50,9 @@ struct process *process_create(const char *name, void (*entry)(void));
 struct process *process_get_by_pid(uint32_t pid);
 struct process *process_table_get(void);
 uint32_t process_get_count(void);
+struct process *process_find_zombie_child(uint32_t parent_pid);
+bool process_has_children(uint32_t parent_pid);
+struct process *process_alloc(void);
+int process_wait_for(uint32_t child_pid, int32_t *status);
 
 #endif /* PROCESS_H */

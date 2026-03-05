@@ -34,6 +34,8 @@ static void cmd_echo(int argc, char **argv);
 static void cmd_clear(int argc, char **argv);
 static void cmd_run(int argc, char **argv);
 static void cmd_ls(int argc, char **argv);
+static void cmd_jobs(int argc, char **argv);
+static void cmd_proc(int argc, char **argv);
 
 static struct command commands[] = {
     {"help",   "Show available commands",     cmd_help},
@@ -42,8 +44,10 @@ static struct command commands[] = {
     {"uptime", "Show system uptime",          cmd_uptime},
     {"echo",   "Print arguments to screen",   cmd_echo},
     {"clear",  "Clear the screen",            cmd_clear},
-    {"run",    "Run a user program",          cmd_run},
+    {"run",    "Run a program (& for bg)",    cmd_run},
     {"ls",     "List files in RAMFS",         cmd_ls},
+    {"jobs",   "List active processes",       cmd_jobs},
+    {"proc",   "Show process details",        cmd_proc},
     {NULL, NULL, NULL}
 };
 
@@ -58,15 +62,20 @@ static void cmd_help(int argc, char **argv) {
 static void cmd_ps(int argc, char **argv) {
     (void)argc; (void)argv;
     struct process *table = process_table_get();
-    const char *state_names[] = {"unused", "ready", "running", "blocked", "terminated"};
+    const char *state_names[] = {
+        "unused", "ready", "running", "blocked", "zombie", "terminated"
+    };
 
-    vga_printf("PID  STATE      NAME\n");
-    vga_printf("---- ---------- ----------------\n");
+    vga_printf("PID  PPID STATE      USER NAME\n");
+    vga_printf("---- ---- ---------- ---- ----------------\n");
     for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (table[i].state != PROCESS_UNUSED) {
-            vga_printf("%-4u %-10s %s\n",
+        if (table[i].state != PROCESS_UNUSED &&
+            table[i].state != PROCESS_TERMINATED) {
+            vga_printf("%-4u %-4u %-10s %-4s %s\n",
                        (uint64_t)table[i].pid,
+                       (uint64_t)table[i].ppid,
                        state_names[table[i].state],
+                       table[i].is_user ? "yes" : "no",
                        table[i].name);
         }
     }
@@ -108,9 +117,15 @@ static void cmd_clear(int argc, char **argv) {
 
 static void cmd_run(int argc, char **argv) {
     if (argc < 2) {
-        vga_printf("Usage: run <program>\n");
+        vga_printf("Usage: run <program> [&]\n");
         vga_printf("Use 'ls' to list available programs.\n");
         return;
+    }
+
+    /* Check for trailing & (background) */
+    bool background = false;
+    if (argc >= 3 && strcmp(argv[argc - 1], "&") == 0) {
+        background = true;
     }
 
     uint64_t prog_size = 0;
@@ -120,12 +135,23 @@ static void cmd_run(int argc, char **argv) {
         return;
     }
 
-    if (user_process_create(argv[1], prog_data, prog_size) < 0) {
+    struct process *shell = scheduler_get_current();
+    if (user_process_create(argv[1], prog_data, prog_size, shell->pid) < 0) {
         vga_printf("Failed to create user process\n");
         return;
     }
 
-    vga_printf("Started '%s' as user process\n", argv[1]);
+    if (background) {
+        vga_printf("Started '%s' in background\n", argv[1]);
+    } else {
+        /* Foreground: block until child exits */
+        int32_t status = 0;
+        int pid = process_wait_for(0, &status);
+        if (pid > 0) {
+            vga_printf("Process %u exited with status %d\n",
+                       (uint64_t)pid, (int64_t)status);
+        }
+    }
 }
 
 static void cmd_ls(int argc, char **argv) {
@@ -140,6 +166,64 @@ static void cmd_ls(int argc, char **argv) {
 
     if (index == 0)
         vga_printf("  (empty)\n");
+}
+
+static void cmd_jobs(int argc, char **argv) {
+    (void)argc; (void)argv;
+    struct process *table = process_table_get();
+    const char *state_names[] = {
+        "unused", "ready", "running", "blocked", "zombie", "terminated"
+    };
+    int count = 0;
+
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (table[i].is_user &&
+            table[i].state != PROCESS_UNUSED &&
+            table[i].state != PROCESS_TERMINATED) {
+            vga_printf("  [%u] %-10s %s\n",
+                       (uint64_t)table[i].pid,
+                       state_names[table[i].state],
+                       table[i].name);
+            count++;
+        }
+    }
+
+    if (count == 0)
+        vga_printf("No active user processes.\n");
+}
+
+static void cmd_proc(int argc, char **argv) {
+    if (argc < 2) {
+        vga_printf("Usage: proc <pid>\n");
+        return;
+    }
+
+    /* Simple string-to-uint conversion */
+    uint32_t pid = 0;
+    for (int i = 0; argv[1][i]; i++) {
+        if (argv[1][i] < '0' || argv[1][i] > '9') {
+            vga_printf("Invalid PID: %s\n", argv[1]);
+            return;
+        }
+        pid = pid * 10 + (uint32_t)(argv[1][i] - '0');
+    }
+
+    struct process *proc = process_get_by_pid(pid);
+    if (!proc) {
+        vga_printf("Process %u not found.\n", (uint64_t)pid);
+        return;
+    }
+
+    const char *state_names[] = {
+        "unused", "ready", "running", "blocked", "zombie", "terminated"
+    };
+
+    vga_printf("PID:   %u\n", (uint64_t)proc->pid);
+    vga_printf("PPID:  %u\n", (uint64_t)proc->ppid);
+    vga_printf("Name:  %s\n", proc->name);
+    vga_printf("State: %s\n", state_names[proc->state]);
+    vga_printf("User:  %s\n", proc->is_user ? "yes" : "no");
+    vga_printf("CR3:   0x%x\n", proc->cr3);
 }
 
 static void shell_readline(char *buf, size_t size) {
@@ -191,6 +275,13 @@ static void shell_execute(char *line) {
 
 void shell_run(void) {
     char line[CMD_BUFFER_SIZE];
+
+    /* When first scheduled via context_switch inside the PIT ISR,
+     * interrupts are disabled (CPU clears IF on interrupt entry).
+     * We must re-enable them or hlt() will halt forever. */
+    sti();
+
+    debug_printf("shell: shell_run started\n");
 
     for (;;) {
         vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);

@@ -5,6 +5,7 @@ typedef unsigned char      uint8_t;
 typedef unsigned short     uint16_t;
 typedef unsigned int       uint32_t;
 typedef unsigned long long uint64_t;
+typedef signed int         int32_t;
 typedef long long          int64_t;
 typedef uint64_t           size_t;
 
@@ -15,6 +16,8 @@ typedef uint64_t           size_t;
 #define SYS_EXIT    1
 #define SYS_GETPID  2
 #define SYS_EXEC    3
+#define SYS_WAIT    4
+#define SYS_FORK    5
 
 static inline uint64_t syscall3(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3) {
     uint64_t ret;
@@ -58,6 +61,14 @@ static inline uint64_t sys_getpid(void) {
 
 static inline int64_t sys_exec(const char *path) {
     return (int64_t)syscall1(SYS_EXEC, (uint64_t)path);
+}
+
+static inline int64_t sys_wait(int32_t *status) {
+    return (int64_t)syscall1(SYS_WAIT, (uint64_t)status);
+}
+
+static inline int64_t sys_fork(void) {
+    return (int64_t)syscall0(SYS_FORK);
 }
 
 #endif /* USER_SYSCALL_H */

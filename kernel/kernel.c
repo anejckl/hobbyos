@@ -18,6 +18,7 @@
 #include "fs/vfs.h"
 #include "fs/ramfs.h"
 #include "user_programs.h"
+#include "autotest.h"
 
 /* Multiboot2 constants */
 #define MULTIBOOT2_MAGIC 0x36D76289
@@ -126,9 +127,21 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
     vga_printf("Type 'help' for a list of commands.\n\n");
     vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
 
-    /* Phase 8: Start shell */
-    shell_run();
+    /* Auto-run integration tests */
+    {
+        struct process *autotest = process_create("autotest", autotest_run);
+        if (autotest)
+            scheduler_add(autotest);
+    }
 
-    /* Should never reach here */
-    kpanic("Shell exited unexpectedly");
+    /* Phase 8: Start shell as a scheduled kernel process */
+    {
+        struct process *shell = process_create("shell", shell_run);
+        if (!shell)
+            kpanic("Failed to create shell process");
+        scheduler_add(shell);
+    }
+
+    /* kernel_main becomes idle loop */
+    for (;;) hlt();
 }

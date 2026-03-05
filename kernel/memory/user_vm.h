@@ -18,4 +18,15 @@ uint64_t user_vm_create_address_space(void);
  * Returns 0 on success, -1 on failure. */
 int user_vm_map_page(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t flags);
 
+/* Clone a parent address space for fork (copies user-space pages).
+ * Returns physical address of new PML4, or 0 on failure. */
+uint64_t user_vm_fork_address_space(uint64_t parent_pml4_phys);
+
+/* Get pointer to leaf PTE for a virtual address.
+ * Returns NULL if any level is not present. */
+uint64_t *user_vm_get_pte(uint64_t pml4_phys, uint64_t virt);
+
+/* Handle a COW page fault. Returns 0 if handled, -1 if not a COW fault. */
+int cow_handle_fault(uint64_t pml4_phys, uint64_t fault_addr);
+
 #endif /* USER_VM_H */

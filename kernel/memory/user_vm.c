@@ -84,3 +84,137 @@ int user_vm_map_page(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t 
 
     return 0;
 }
+
+uint64_t *user_vm_get_pte(uint64_t pml4_phys, uint64_t virt) {
+    uint64_t *pml4 = (uint64_t *)PHYS_TO_VIRT(pml4_phys);
+
+    uint64_t pml4_idx = PML4_INDEX(virt);
+    if (!(pml4[pml4_idx] & PTE_PRESENT))
+        return NULL;
+    uint64_t *pdpt = (uint64_t *)PHYS_TO_VIRT(pml4[pml4_idx] & PTE_ADDR_MASK);
+
+    uint64_t pdpt_idx = PDPT_INDEX(virt);
+    if (!(pdpt[pdpt_idx] & PTE_PRESENT))
+        return NULL;
+    if (pdpt[pdpt_idx] & PTE_HUGE)
+        return NULL;
+    uint64_t *pd = (uint64_t *)PHYS_TO_VIRT(pdpt[pdpt_idx] & PTE_ADDR_MASK);
+
+    uint64_t pd_idx = PD_INDEX(virt);
+    if (!(pd[pd_idx] & PTE_PRESENT))
+        return NULL;
+    if (pd[pd_idx] & PTE_HUGE)
+        return NULL;
+    uint64_t *pt = (uint64_t *)PHYS_TO_VIRT(pd[pd_idx] & PTE_ADDR_MASK);
+
+    uint64_t pt_idx = PT_INDEX(virt);
+    return &pt[pt_idx];
+}
+
+uint64_t user_vm_fork_address_space(uint64_t parent_pml4_phys) {
+    /* Create new PML4 with kernel entries */
+    uint64_t child_pml4_phys = user_vm_create_address_space();
+    if (!child_pml4_phys)
+        return 0;
+
+    uint64_t *parent_pml4 = (uint64_t *)PHYS_TO_VIRT(parent_pml4_phys);
+
+    /* Walk user-space entries: PML4 indices 0-255 */
+    for (int pml4_i = 0; pml4_i < 256; pml4_i++) {
+        if (!(parent_pml4[pml4_i] & PTE_PRESENT))
+            continue;
+
+        uint64_t *pdpt = (uint64_t *)PHYS_TO_VIRT(parent_pml4[pml4_i] & PTE_ADDR_MASK);
+
+        for (int pdpt_i = 0; pdpt_i < 512; pdpt_i++) {
+            if (!(pdpt[pdpt_i] & PTE_PRESENT))
+                continue;
+            if (pdpt[pdpt_i] & PTE_HUGE)
+                continue;
+
+            uint64_t *pd = (uint64_t *)PHYS_TO_VIRT(pdpt[pdpt_i] & PTE_ADDR_MASK);
+
+            for (int pd_i = 0; pd_i < 512; pd_i++) {
+                if (!(pd[pd_i] & PTE_PRESENT))
+                    continue;
+                if (pd[pd_i] & PTE_HUGE)
+                    continue;
+
+                uint64_t *pt = (uint64_t *)PHYS_TO_VIRT(pd[pd_i] & PTE_ADDR_MASK);
+
+                for (int pt_i = 0; pt_i < 512; pt_i++) {
+                    if (!(pt[pt_i] & PTE_PRESENT))
+                        continue;
+
+                    uint64_t phys = pt[pt_i] & PTE_ADDR_MASK;
+                    uint64_t flags = pt[pt_i] & ~PTE_ADDR_MASK;
+
+                    /* Compute virtual address from indices */
+                    uint64_t virt = ((uint64_t)pml4_i << 39) |
+                                    ((uint64_t)pdpt_i << 30) |
+                                    ((uint64_t)pd_i << 21) |
+                                    ((uint64_t)pt_i << 12);
+
+                    /* COW: if page was writable, mark as read-only + COW */
+                    if (flags & PTE_WRITABLE) {
+                        flags &= ~PTE_WRITABLE;
+                        flags |= PTE_COW;
+                        /* Update parent PTE to match */
+                        pt[pt_i] = (phys & PTE_ADDR_MASK) | flags;
+                    }
+
+                    /* Share the same physical page */
+                    pmm_page_ref(phys);
+
+                    /* Map in child address space with same flags */
+                    if (user_vm_map_page(child_pml4_phys, virt,
+                                         phys, flags) < 0) {
+                        debug_printf("user_vm: fork: map failed\n");
+                        return 0;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Flush parent's TLB since we changed its PTEs */
+    write_cr3(read_cr3());
+
+    debug_printf("user_vm: COW forked address space: parent=0x%x child=0x%x\n",
+                 parent_pml4_phys, child_pml4_phys);
+    return child_pml4_phys;
+}
+
+int cow_handle_fault(uint64_t pml4_phys, uint64_t fault_addr) {
+    uint64_t *pte = user_vm_get_pte(pml4_phys, fault_addr);
+    if (!pte)
+        return -1;
+
+    /* Check if this is a COW page */
+    if (!(*pte & PTE_PRESENT) || !(*pte & PTE_COW))
+        return -1;
+
+    uint64_t old_phys = *pte & PTE_ADDR_MASK;
+    uint64_t flags = *pte & ~PTE_ADDR_MASK;
+
+    if (pmm_page_refcount(old_phys) == 1) {
+        /* We're the sole owner — just make it writable again */
+        *pte = (old_phys & PTE_ADDR_MASK) | (flags & ~PTE_COW) | PTE_WRITABLE;
+        invlpg(fault_addr & ~(uint64_t)(PAGE_SIZE - 1));
+        return 0;
+    }
+
+    /* Multiple owners — allocate a new page and copy */
+    uint64_t new_phys = pmm_alloc_page();
+    if (!new_phys)
+        return -1;
+
+    memcpy(PHYS_TO_VIRT(new_phys), PHYS_TO_VIRT(old_phys), PAGE_SIZE);
+    pmm_page_unref(old_phys);
+
+    /* Update PTE: new page, writable, no COW */
+    *pte = (new_phys & PTE_ADDR_MASK) | (flags & ~PTE_COW) | PTE_WRITABLE;
+    invlpg(fault_addr & ~(uint64_t)(PAGE_SIZE - 1));
+
+    return 0;
+}
