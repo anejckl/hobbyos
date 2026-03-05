@@ -14,6 +14,83 @@ make test-qemu    # Run QEMU boot smoke test only (requires 'make iso')
 make install-hooks # Install git pre-commit hook (runs test-host)
 ```
 
+## Development Environment
+
+This project is developed on **Windows 11 with Git Bash**. There is **no native gcc, nasm, or QEMU** installed. All building and testing happens through **Docker**.
+
+### How to Build and Test (the ONLY way that works)
+
+```bash
+# Build the Docker image (one-time, has gcc + nasm + grub + qemu):
+MSYS_NO_PATHCONV=1 docker build -t hobbyos-test .
+
+# Run any make target inside Docker:
+MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test make test
+MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test make test-host
+MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test make iso
+MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test make test-qemu
+```
+
+### Critical: Docker Volume Mount on Windows/MSYS2
+
+- **Always** prefix Docker commands with `MSYS_NO_PATHCONV=1` — without it, Git Bash mangles `/hobbyos` into `C:/Program Files/Git/hobbyos`.
+- **Always** use the full Windows path `C:/Users/Uporabnik/Documents/hobbyos:/hobbyos` — do NOT use `$(pwd)` as it expands incorrectly in Git Bash.
+- The Dockerfile's `WORKDIR` is `/hobbyos`, which matches the mount target.
+
+### GitHub CLI (`gh`)
+
+```bash
+# gh is installed at this path — add to PATH before use:
+export PATH="$PATH:/c/Program Files/GitHub CLI"
+
+# Then use normally:
+gh run list
+gh run view <run-id>
+gh run watch <run-id>
+gh repo view --json visibility
+```
+
+### Checking CI Status
+
+```bash
+export PATH="$PATH:/c/Program Files/GitHub CLI"
+
+# List recent workflow runs:
+gh run list --limit 5
+
+# Watch a running workflow (blocks until done):
+gh run watch <run-id>
+
+# View details of a specific run:
+gh run view <run-id>
+
+# Rerun a failed workflow:
+gh run rerun <run-id>
+
+# If rerun fails with "cannot be retried" (e.g. startup_failure),
+# push an empty commit to trigger a fresh run:
+git commit --allow-empty -m "Trigger CI" && git push
+```
+
+### Line Endings
+
+- `.gitattributes` enforces LF in the repository.
+- Windows tools may create files with CRLF. Fix with: `sed -i 's/\r$//' <file>`
+- If `make` fails with "No rule to make target", check for CRLF in the Makefile: `file Makefile` should say "ASCII text", NOT "with CRLF line terminators".
+
+### What's NOT Available Natively
+
+| Tool | Available? | How to use |
+|------|-----------|------------|
+| `gcc` | No | Use Docker |
+| `nasm` | No | Use Docker |
+| `qemu-system-x86_64` | No | Use Docker |
+| `grub-mkrescue` | No | Use Docker |
+| `make` | No (in bash) | Use Docker |
+| `docker` | Yes | Direct from Git Bash |
+| `gh` (GitHub CLI) | Yes | Needs PATH (see above) |
+| `git` | Yes | Direct from Git Bash |
+
 ## Mandatory Rules
 
 1. **Run `make test` before every commit.** A pre-commit hook enforces `make test-host` automatically (install via `make install-hooks`).
