@@ -35,6 +35,10 @@ struct process {
     struct context context;
     uint64_t kernel_stack;       /* Top of kernel stack */
     struct process *next;        /* For scheduler queue */
+    uint64_t cr3;                /* Physical address of PML4, 0 = kernel CR3 */
+    bool is_user;                /* true if ring 3 process */
+    const uint8_t *user_program_data;  /* pointer to embedded program binary */
+    uint64_t user_program_size;
 };
 
 void process_init(void);

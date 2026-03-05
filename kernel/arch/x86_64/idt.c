@@ -24,6 +24,9 @@ void idt_init(void) {
         idt_set_gate(i, isr_stub_table[i], GDT_KERNEL_CODE, IDT_GATE_INTERRUPT);
     }
 
+    /* Override INT 0x80 to allow ring 3 access (DPL=3 interrupt gate) */
+    idt_set_gate(0x80, isr_stub_table[0x80], GDT_KERNEL_CODE, IDT_GATE_USER_INTERRUPT);
+
     idt_ptr.limit = sizeof(idt_entries) - 1;
     idt_ptr.base  = (uint64_t)&idt_entries;
 

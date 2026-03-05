@@ -12,6 +12,7 @@
 #include "memory/kheap.h"
 #include "process/process.h"
 #include "scheduler/scheduler.h"
+#include "syscall/syscall.h"
 #include "shell/shell.h"
 #include "debug/debug.h"
 
@@ -96,6 +97,11 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
     scheduler_init();
     vga_printf("[OK] Scheduler initialized\n");
     debug_printf("Scheduler initialized\n");
+
+    /* Syscall interface */
+    syscall_init();
+    vga_printf("[OK] Syscall handler registered\n");
+    debug_printf("Syscall handler registered\n");
 
     /* Enable interrupts */
     sti();

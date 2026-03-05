@@ -34,6 +34,10 @@ struct process *process_create(const char *name, void (*entry)(void)) {
     proc->state = PROCESS_READY;
     proc->kernel_stack = (uint64_t)stack + PROCESS_STACK_SIZE;
     proc->next = NULL;
+    proc->cr3 = 0;
+    proc->is_user = false;
+    proc->user_program_data = NULL;
+    proc->user_program_size = 0;
 
     /* Set up initial context so context_switch will "return" to entry */
     memset(&proc->context, 0, sizeof(struct context));

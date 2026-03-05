@@ -4,8 +4,9 @@
 #include "../../common.h"
 
 /* IDT gate types */
-#define IDT_GATE_INTERRUPT  0x8E    /* P=1, DPL=0, type=0xE (64-bit interrupt gate) */
-#define IDT_GATE_TRAP       0x8F    /* P=1, DPL=0, type=0xF (64-bit trap gate) */
+#define IDT_GATE_INTERRUPT       0x8E  /* P=1, DPL=0, type=0xE (64-bit interrupt gate) */
+#define IDT_GATE_TRAP            0x8F  /* P=1, DPL=0, type=0xF (64-bit trap gate) */
+#define IDT_GATE_USER_INTERRUPT  0xEE  /* P=1, DPL=3, type=0xE (user-callable interrupt gate) */
 
 /* IDT entry (16 bytes in 64-bit mode) */
 struct idt_entry {

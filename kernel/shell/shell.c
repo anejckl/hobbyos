@@ -7,6 +7,8 @@
 #include "../memory/pmm.h"
 #include "../process/process.h"
 #include "../scheduler/scheduler.h"
+#include "../process/user_process.h"
+#include "../user_programs.h"
 #include "../debug/debug.h"
 
 #define CMD_BUFFER_SIZE 256
@@ -28,6 +30,7 @@ static void cmd_mem(int argc, char **argv);
 static void cmd_uptime(int argc, char **argv);
 static void cmd_echo(int argc, char **argv);
 static void cmd_clear(int argc, char **argv);
+static void cmd_run(int argc, char **argv);
 
 static struct command commands[] = {
     {"help",   "Show available commands",     cmd_help},
@@ -36,6 +39,7 @@ static struct command commands[] = {
     {"uptime", "Show system uptime",          cmd_uptime},
     {"echo",   "Print arguments to screen",   cmd_echo},
     {"clear",  "Clear the screen",            cmd_clear},
+    {"run",    "Run a user program",          cmd_run},
     {NULL, NULL, NULL}
 };
 
@@ -96,6 +100,28 @@ static void cmd_echo(int argc, char **argv) {
 static void cmd_clear(int argc, char **argv) {
     (void)argc; (void)argv;
     vga_clear();
+}
+
+static void cmd_run(int argc, char **argv) {
+    if (argc < 2) {
+        vga_printf("Usage: run <program>\n");
+        vga_printf("Available: hello, counter\n");
+        return;
+    }
+
+    const struct user_program *prog = user_programs_find(argv[1]);
+    if (!prog) {
+        vga_printf("Unknown program: %s\n", argv[1]);
+        vga_printf("Available: hello, counter\n");
+        return;
+    }
+
+    if (user_process_create(argv[1], prog->data, prog->size) < 0) {
+        vga_printf("Failed to create user process\n");
+        return;
+    }
+
+    vga_printf("Started '%s' as user process\n", argv[1]);
 }
 
 static void shell_readline(char *buf, size_t size) {

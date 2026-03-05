@@ -2,9 +2,9 @@
 #include "tss.h"
 #include "../../string.h"
 
-/* GDT: null + code64 + data64 + TSS(16 bytes) = 4 regular entries + 1 TSS (takes 2 slots) */
-/* Total: 5 GDT entries worth of space */
-static struct gdt_entry gdt_entries[5];
+/* GDT: null + code64 + data64 + TSS(16 bytes) + user_code + user_data */
+/* Total: 7 GDT entries worth of space (TSS takes slots 3-4, user code=5, user data=6) */
+static struct gdt_entry gdt_entries[7];
 static struct gdt_pointer gdt_ptr;
 
 static void gdt_set_entry(int index, uint32_t base, uint32_t limit,
@@ -53,6 +53,17 @@ void gdt_init(void) {
 
     /* TSS (takes entries 3 and 4, as it's 16 bytes in 64-bit mode) */
     gdt_set_tss(3, tss_get());
+
+    /* User code segment: Execute/Read, Ring 3, 64-bit
+     * Access: Present(7) + DPL3(5-6) + S(4) + Code(3) + Exec(1) + Read(0)
+     * = 0xFA
+     * Granularity: L bit(5) for 64-bit = 0x20 */
+    gdt_set_entry(5, 0, 0xFFFFF, 0xFA, 0x20);
+
+    /* User data segment: Read/Write, Ring 3
+     * Access: Present(7) + DPL3(5-6) + S(4) + Data(0) + Write(1)
+     * = 0xF2 */
+    gdt_set_entry(6, 0, 0xFFFFF, 0xF2, 0x00);
 
     /* Set up GDT pointer */
     gdt_ptr.limit = sizeof(gdt_entries) - 1;

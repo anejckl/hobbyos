@@ -16,7 +16,7 @@ make install-hooks # Install git pre-commit hook (runs test-host)
 
 ## Development Environment
 
-This project is developed on **Windows 11 with Git Bash**. There is **no native gcc, nasm, or QEMU** installed. All building and testing happens through **Docker**.
+This project is developed on **Windows 11 with Git Bash**. There is **no native gcc, nasm, or make** — all building and testing happens through **Docker**. QEMU **is** installed natively for interactive testing.
 
 ### How to Build and Test (the ONLY way that works)
 
@@ -78,17 +78,31 @@ git commit --allow-empty -m "Trigger CI" && git push
 - Windows tools may create files with CRLF. Fix with: `sed -i 's/\r$//' <file>`
 - If `make` fails with "No rule to make target", check for CRLF in the Makefile: `file Makefile` should say "ASCII text", NOT "with CRLF line terminators".
 
-### What's NOT Available Natively
+### Running Interactively (Native QEMU)
 
-| Tool | Available? | How to use |
-|------|-----------|------------|
+After building the ISO via Docker, launch QEMU natively to get a GUI window for interactive testing:
+
+```bash
+/c/msys64/ucrt64/bin/qemu-system-x86_64.exe \
+  -cdrom C:/Users/Uporabnik/Documents/hobbyos/hobbyos.iso \
+  -serial stdio -m 128M -no-reboot -no-shutdown
+```
+
+- QEMU binary path: `/c/msys64/ucrt64/bin/qemu-system-x86_64.exe`
+- VGA output appears in the QEMU GUI window; serial debug output appears in the terminal
+- Use `run_in_background: true` when launching from Claude Code so the window stays open for the user
+
+### Native Tool Availability
+
+| Tool | Available? | Path / How to use |
+|------|-----------|-------------------|
 | `gcc` | No | Use Docker |
 | `nasm` | No | Use Docker |
-| `qemu-system-x86_64` | No | Use Docker |
-| `grub-mkrescue` | No | Use Docker |
 | `make` | No (in bash) | Use Docker |
+| `grub-mkrescue` | No | Use Docker |
+| `qemu-system-x86_64` | **Yes** | `/c/msys64/ucrt64/bin/qemu-system-x86_64.exe` |
 | `docker` | Yes | Direct from Git Bash |
-| `gh` (GitHub CLI) | Yes | Needs PATH (see above) |
+| `gh` (GitHub CLI) | Yes | `/c/Program Files/GitHub CLI/gh` (needs PATH) |
 | `git` | Yes | Direct from Git Bash |
 
 ## Mandatory Rules
@@ -136,14 +150,15 @@ hobbyos/
 │   ├── string.c / string.h     # strlen, strcmp, memcpy, strtok, etc. (no libc)
 │   │
 │   ├── arch/x86_64/
-│   │   ├── gdt.c / gdt.h       # GDT: null, kernel code (0x08), data (0x10), TSS (0x18)
+│   │   ├── gdt.c / gdt.h       # GDT: null, code(0x08), data(0x10), TSS(0x18), user code(0x28), user data(0x30)
 │   │   ├── gdt_flush.asm       # Reload segment registers
 │   │   ├── tss.c / tss.h       # TSS for RSP0 ring-transition stack
-│   │   ├── idt.c / idt.h       # 256-entry IDT
+│   │   ├── idt.c / idt.h       # 256-entry IDT, INT 0x80 set to DPL=3 for user syscalls
 │   │   ├── idt_flush.asm       # LIDT wrapper
 │   │   ├── isr.c / isr.h       # ISR dispatch + handler registration table
 │   │   ├── isr_stubs.asm       # 256 macro-generated ISR entry stubs
-│   │   └── pic.c / pic.h       # 8259 PIC: remap IRQs 0-15 → INT 32-47
+│   │   ├── pic.c / pic.h       # 8259 PIC: remap IRQs 0-15 → INT 32-47
+│   │   └── usermode.asm / .h   # Ring 3 entry via IRETQ (enter_usermode)
 │   │
 │   ├── interrupts/
 │   │   └── interrupts.c / .h   # Default exception handlers (breakpoint, page fault)
@@ -151,10 +166,15 @@ hobbyos/
 │   ├── memory/
 │   │   ├── pmm.c / pmm.h       # Bitmap page frame allocator (4 KB pages, ≤512 MB)
 │   │   ├── vmm.c / vmm.h       # 4-level page table walker (PML4→PDPT→PD→PT)
-│   │   └── kheap.c / kheap.h   # Bump allocator heap at 0xFFFFFFFF90000000 (4 MB)
+│   │   ├── kheap.c / kheap.h   # Bump allocator heap at 0xFFFFFFFF90000000 (4 MB)
+│   │   └── user_vm.c / .h      # Per-process address spaces (PML4 clone + user page mapping)
 │   │
 │   ├── process/
-│   │   └── process.c / .h      # PCB table (64 slots), 8 KB kernel stack per process
+│   │   ├── process.c / .h      # PCB table (64 slots), 8 KB kernel stack per process
+│   │   └── user_process.c / .h # User-mode process creation (address space + trampoline)
+│   │
+│   ├── syscall/
+│   │   └── syscall.c / .h      # INT 0x80 handler: sys_write(0), sys_exit(1), sys_getpid(2)
 │   │
 │   ├── scheduler/
 │   │   ├── scheduler.c / .h    # Round-robin, 100 ms quantum (10 ticks at 100 Hz)
@@ -167,10 +187,18 @@ hobbyos/
 │   │   └── pit.c / pit.h       # PIT channel 0, calls scheduler_tick()
 │   │
 │   ├── shell/
-│   │   └── shell.c / shell.h   # 6 commands: help, ps, mem, uptime, echo, clear
+│   │   └── shell.c / shell.h   # 7 commands: help, ps, mem, uptime, echo, clear, run
+│   │
+│   ├── user_programs.c / .h    # Embedded user program registry (find by name)
 │   │
 │   └── debug/
 │       └── debug.c / debug.h   # COM1 serial (38400 baud, 8-N-1)
+│
+├── user/
+│   ├── syscall.h               # User-space syscall wrappers (inline INT 0x80)
+│   ├── hello.c                 # "Hello from user mode!" + PID
+│   ├── counter.c               # Counts 1-5 with delays
+│   └── user.ld                 # User program linker script (entry at 0x400000)
 │
 ├── scripts/
 │   └── pre-commit              # Git hook — runs make test-host before commits
@@ -191,6 +219,8 @@ hobbyos/
 
 | Virtual Range | Size | Purpose |
 |---|---|---|
+| `0x400000` | varies | User code base (per-process address space) |
+| `0x7FFFFF000` | 4 KB | User stack (1 page, grows down from `0x800000000`) |
 | `0x0–0x1FFFFF` | 2 MB | Identity map (boot only) |
 | `0xFFFF800000000000–0xFFFF80001FFFFFFF` | 512 MB | Physical memory direct map |
 | `0xFFFFFFFF80000000–0xFFFFFFFF80FFFFFF` | 16 MB | Kernel text/data/bss |
@@ -216,9 +246,19 @@ hobbyos/
 | Selector | Segment |
 |---|---|
 | 0x00 | Null |
-| 0x08 | Kernel Code (64-bit) |
-| 0x10 | Kernel Data |
-| 0x18 | TSS |
+| 0x08 | Kernel Code (64-bit, DPL=0) |
+| 0x10 | Kernel Data (DPL=0) |
+| 0x18 | TSS (16 bytes, slots 3-4) |
+| 0x28 | User Code (64-bit, DPL=3) — RPL3 selector: `0x2B` |
+| 0x30 | User Data (DPL=3) — RPL3 selector: `0x33` |
+
+### Syscalls (INT 0x80)
+
+| RAX | Name | Args | Returns |
+|-----|------|------|---------|
+| 0 | `sys_write` | RDI=fd, RSI=buf, RDX=len | bytes written |
+| 1 | `sys_exit` | RDI=status | never returns |
+| 2 | `sys_getpid` | — | PID |
 
 ### IRQ Mapping (8259 PIC)
 
@@ -242,7 +282,9 @@ hobbyos/
 - New drivers → `kernel/drivers/`
 - New arch code → `kernel/arch/x86_64/`
 - New memory subsystems → `kernel/memory/`
-- Add new `.c` files to `C_SRCS` in the Makefile
+- New user programs → `user/` (add to `USER_PROGRAMS` list in Makefile)
+- Add new kernel `.c` files to `C_SRCS` in the Makefile
+- Add new kernel `.asm` files to `ASM_SRCS` in the Makefile
 
 ## Code Templates
 
@@ -409,3 +451,11 @@ Then:
 9. **All `debug_printf` args are 64-bit.** `%d` expects `int64_t`, `%u`/`%x` expect `uint64_t`. Cast smaller types: `(uint64_t)my_int`.
 
 10. **`strtok` is not reentrant.** It uses a static `strtok_state` variable. Don't call from interrupt handlers.
+
+11. **User programs are flat binaries at `0x400000`.** They use `user/syscall.h` for syscalls, NOT kernel headers. Compiled with `USER_CFLAGS` (no `-mcmodel=kernel`).
+
+12. **User program build pipeline:** `gcc -c` → `ld -T user/user.ld` → `objcopy -O binary` → `objcopy -I binary -O elf64-x86-64` (embeds as `.rodata` in kernel). Symbols: `_binary_<name>_bin_start/end`.
+
+13. **Per-process address spaces** copy PML4[256] (phys direct map) and PML4[511] (kernel) from boot PML4. User pages go in PML4[0]. PTE_USER must be set at ALL page table levels.
+
+14. **`vga_printf` has no width/alignment support** (`%-4u`, `%-10s` print literally). Use manual padding if needed.

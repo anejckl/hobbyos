@@ -8,6 +8,7 @@ static struct process *ready_queue_head = NULL;
 static struct process *ready_queue_tail = NULL;
 static volatile uint64_t tick_count = 0;
 static bool scheduler_enabled = false;
+static uint64_t kernel_cr3 = 0;
 
 /* Idle process: just halts waiting for interrupts */
 static void idle_task(void) {
@@ -17,6 +18,9 @@ static void idle_task(void) {
 }
 
 void scheduler_init(void) {
+    /* Save boot CR3 for kernel processes */
+    kernel_cr3 = read_cr3();
+
     /* Create idle process */
     struct process *idle = process_create("idle", idle_task);
     if (idle) {
@@ -73,6 +77,12 @@ void schedule(void) {
 
     /* Update TSS RSP0 for the new process */
     tss_set_rsp0(next->kernel_stack);
+
+    /* Switch CR3 for per-process address spaces */
+    if (next->cr3)
+        write_cr3(next->cr3);
+    else
+        write_cr3(kernel_cr3);
 
     /* Perform context switch */
     if (old && old != next)

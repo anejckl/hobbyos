@@ -3,6 +3,7 @@
 # Use x86_64-elf-gcc if available, else fall back to native gcc
 CC := $(shell command -v x86_64-elf-gcc 2>/dev/null || echo gcc)
 LD := $(shell command -v x86_64-elf-ld 2>/dev/null || echo ld)
+OBJCOPY := $(shell command -v x86_64-elf-objcopy 2>/dev/null || echo objcopy)
 AS = nasm
 
 CFLAGS = -ffreestanding -mno-red-zone -mcmodel=kernel -Wall -Wextra \
@@ -11,11 +12,17 @@ CFLAGS = -ffreestanding -mno-red-zone -mcmodel=kernel -Wall -Wextra \
 ASFLAGS = -f elf64 -g
 LDFLAGS = -T linker.ld -nostdlib -z max-page-size=0x1000
 
+# User program build flags (no -mcmodel=kernel, user code runs at 0x400000)
+USER_CFLAGS = -ffreestanding -mno-red-zone -Wall -Wextra \
+              -fno-stack-protector -fno-pic -nostdlib -nostdinc -Iuser -O2 -g \
+              -mno-sse -mno-sse2 -mno-mmx -mno-avx
+
 # Source files
 ASM_SRCS = boot/boot.asm \
            kernel/arch/x86_64/gdt_flush.asm \
            kernel/arch/x86_64/idt_flush.asm \
            kernel/arch/x86_64/isr_stubs.asm \
+           kernel/arch/x86_64/usermode.asm \
            kernel/scheduler/context_switch.asm
 
 C_SRCS = kernel/kernel.c \
@@ -28,9 +35,13 @@ C_SRCS = kernel/kernel.c \
          kernel/memory/pmm.c \
          kernel/memory/vmm.c \
          kernel/memory/kheap.c \
+         kernel/memory/user_vm.c \
          kernel/interrupts/interrupts.c \
          kernel/process/process.c \
+         kernel/process/user_process.c \
          kernel/scheduler/scheduler.c \
+         kernel/syscall/syscall.c \
+         kernel/user_programs.c \
          kernel/drivers/vga.c \
          kernel/drivers/keyboard.c \
          kernel/drivers/pit.c \
@@ -40,7 +51,12 @@ C_SRCS = kernel/kernel.c \
 # Object files
 ASM_OBJS = $(ASM_SRCS:.asm=.o)
 C_OBJS = $(C_SRCS:.c=.o)
-OBJS = $(ASM_OBJS) $(C_OBJS)
+
+# User program embedded objects
+USER_PROGRAMS = hello counter
+USER_EMBED_OBJS = $(patsubst %,user/%_embed.o,$(USER_PROGRAMS))
+
+OBJS = $(ASM_OBJS) $(C_OBJS) $(USER_EMBED_OBJS)
 
 KERNEL_BIN = kernel.bin
 ISO = hobbyos.iso
@@ -58,6 +74,23 @@ $(KERNEL_BIN): $(OBJS) linker.ld
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
+
+# --- User program build pipeline ---
+# Compile user .c to .o (with user CFLAGS, not kernel CFLAGS)
+user/%.o: user/%.c user/syscall.h
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+# Link user .o to .elf using user linker script
+user/%.elf: user/%.o user/user.ld
+	$(LD) -T user/user.ld -nostdlib -o $@ $<
+
+# Convert ELF to flat binary
+user/%.bin: user/%.elf
+	$(OBJCOPY) -O binary $< $@
+
+# Embed flat binary as ELF .rodata object (cd to user/ so symbols are _binary_<name>_bin_*)
+user/%_embed.o: user/%.bin
+	cd user && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 $*.bin $*_embed.o
 
 iso: $(KERNEL_BIN)
 	mkdir -p $(ISO_DIR)/boot/grub
@@ -95,4 +128,5 @@ install-hooks:
 
 clean:
 	rm -f $(OBJS) $(KERNEL_BIN) $(ISO) tests/run_tests tests/serial_output.log
+	rm -f user/*.o user/*.elf user/*.bin
 	rm -rf $(ISO_DIR)

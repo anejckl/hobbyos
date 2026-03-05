@@ -7,6 +7,10 @@
 #define GDT_KERNEL_CODE 0x08
 #define GDT_KERNEL_DATA 0x10
 #define GDT_TSS         0x18
+#define GDT_USER_CODE   0x28        /* Index 5 */
+#define GDT_USER_DATA   0x30        /* Index 6 */
+#define GDT_USER_CODE_RPL3 0x2B     /* 0x28 | 3 */
+#define GDT_USER_DATA_RPL3 0x33     /* 0x30 | 3 */
 
 /* GDT entry (8 bytes) */
 struct gdt_entry {
