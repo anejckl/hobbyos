@@ -1,0 +1,39 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  host-tests:
+    name: Host Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install gcc
+        run: sudo apt-get update && sudo apt-get install -y gcc
+
+      - name: Run host unit tests
+        run: make test-host
+
+  qemu-smoke:
+    name: QEMU Smoke Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm gcc binutils make \
+            grub-pc-bin grub-common xorriso mtools \
+            qemu-system-x86
+
+      - name: Build ISO
+        run: make iso
+
+      - name: Run QEMU smoke test
+        run: make test-qemu

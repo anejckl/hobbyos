@@ -1,0 +1,10 @@
+# Build artifacts
+*.o
+*.bin
+*.iso
+isodir/
+
+# Test artifacts
+tests/run_tests
+tests/run_tests.exe
+tests/serial_output.log

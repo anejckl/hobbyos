@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# pre-commit hook — runs host unit tests before allowing a commit.
+# Install with: make install-hooks
+#
+set -euo pipefail
+
+echo "Running pre-commit tests..."
+
+if ! make test-host 2>&1; then
+    echo ""
+    echo "Pre-commit hook FAILED: unit tests did not pass."
+    echo "Fix the failing tests before committing."
+    exit 1
+fi
+
+echo "Pre-commit tests passed."

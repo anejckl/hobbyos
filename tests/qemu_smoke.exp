@@ -1,0 +1,15 @@
+# Expected serial output patterns for HobbyOS boot.
+# Each non-empty, non-comment line is checked as a literal substring.
+HobbyOS: Serial debug output initialized
+GDT initialized
+PIC remapped
+IDT initialized
+Interrupt handlers registered
+PIT initialized at 100Hz
+Keyboard initialized
+PMM:
+VMM initialized
+Kernel heap initialized
+Process subsystem initialized
+Scheduler initialized
+Interrupts enabled
