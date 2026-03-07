@@ -1,10 +1,24 @@
 # Build artifacts
 *.o
+*.d
 *.bin
 *.iso
+*.elf
+*.img
 isodir/
 
 # Test artifacts
 tests/run_tests
 tests/run_tests.exe
 tests/serial_output.log
+tests/interactive_serial.log
+tests/interactive_results.json
+tests/qemu_monitor.sock
+tests/qemu_serial.log
+tests/debug_serial.log
+
+# Misc
+serial.log
+serial_debug.log
+serial_test.log
+test_features.py

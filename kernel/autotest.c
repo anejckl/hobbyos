@@ -13,6 +13,7 @@ static const char *test_programs[] = {
     "pipe_test",
     "signal_test",
     "procfs_test",
+    "net_test",
     NULL
 };
 

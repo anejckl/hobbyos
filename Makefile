@@ -8,7 +8,7 @@ AS = nasm
 
 CFLAGS = -ffreestanding -mno-red-zone -mcmodel=kernel -Wall -Wextra \
          -fno-stack-protector -fno-pic -nostdlib -nostdinc -Ikernel -O2 -g \
-         -mno-sse -mno-sse2 -mno-mmx -mno-avx
+         -mno-sse -mno-sse2 -mno-mmx -mno-avx -MMD -MP
 ASFLAGS = -f elf64 -g
 LDFLAGS = -T linker.ld -nostdlib -z max-page-size=0x1000
 
@@ -63,14 +63,26 @@ C_SRCS = kernel/kernel.c \
          kernel/memory/user_access.c \
          kernel/shell/shell.c \
          kernel/debug/debug.c \
-         kernel/autotest.c
+         kernel/autotest.c \
+         kernel/drivers/pci.c \
+         kernel/drivers/e1000.c \
+         kernel/net/netbuf.c \
+         kernel/net/net.c \
+         kernel/net/ethernet.c \
+         kernel/net/arp.c \
+         kernel/net/ipv4.c \
+         kernel/net/icmp.c \
+         kernel/net/udp.c \
+         kernel/net/tcp.c \
+         kernel/net/socket.c
 
 # Object files
 ASM_OBJS = $(ASM_SRCS:.asm=.o)
 C_OBJS = $(C_SRCS:.c=.o)
+C_DEPS = $(C_OBJS:.o=.d)
 
 # User program embedded objects
-USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm
+USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm net_test nc httpd ping
 USER_EMBED_OBJS = $(patsubst %,user/%_embed.o,$(USER_PROGRAMS))
 
 OBJS = $(ASM_OBJS) $(C_OBJS) $(USER_EMBED_OBJS)
@@ -128,19 +140,22 @@ disk.img: $(patsubst %,user/%.elf,$(USER_PROGRAMS))
 QEMU_DISK_FLAGS = $(if $(wildcard disk.img),-drive file=disk.img$(comma)format=raw$(comma)if=ide,)
 comma := ,
 
+# QEMU flags for networking (e1000 NIC with SLIRP user-mode networking)
+QEMU_NET_FLAGS = -netdev user$(comma)id=net0$(comma)hostfwd=tcp::8080-:80 -device e1000$(comma)netdev=net0
+
 run: iso
 	qemu-system-x86_64 -cdrom $(ISO) -serial stdio -m 128M \
-		-no-reboot -no-shutdown $(QEMU_DISK_FLAGS)
+		-no-reboot -no-shutdown $(QEMU_DISK_FLAGS) $(QEMU_NET_FLAGS)
 
 debug: iso
 	@echo "Starting QEMU in debug mode..."
 	@echo "Connect GDB with: target remote localhost:1234"
 	qemu-system-x86_64 -cdrom $(ISO) -serial stdio -m 128M \
-		-no-reboot -no-shutdown -s -S -d int,cpu_reset $(QEMU_DISK_FLAGS)
+		-no-reboot -no-shutdown -s -S -d int,cpu_reset $(QEMU_DISK_FLAGS) $(QEMU_NET_FLAGS)
 
 # Host-side unit tests (fast, no QEMU needed)
 test-host:
-	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_refcount.c tests/test_printf.c tests/test_elf.c tests/test_vfs.c tests/test_pipe.c tests/test_signal.c -Itests -Wall -Wextra
+	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_refcount.c tests/test_printf.c tests/test_elf.c tests/test_vfs.c tests/test_pipe.c tests/test_signal.c tests/test_netbuf.c tests/test_checksum.c -Itests -Wall -Wextra
 	./tests/run_tests
 
 # QEMU smoke test (boots kernel, checks serial output)
@@ -164,7 +179,11 @@ install-hooks:
 	@echo "Pre-commit hook installed."
 
 clean:
-	rm -f $(OBJS) $(KERNEL_BIN) $(ISO) tests/run_tests tests/serial_output.log tests/interactive_serial.log tests/interactive_results.json
+	rm -f $(OBJS) $(C_DEPS) $(KERNEL_BIN) $(ISO) tests/run_tests tests/serial_output.log tests/interactive_serial.log tests/interactive_results.json
 	rm -f user/*.o user/*.elf user/*.bin
-	rm -f kernel/elf/*.o kernel/fs/*.o kernel/signal/*.o kernel/drivers/*.o
+	rm -f kernel/elf/*.o kernel/fs/*.o kernel/signal/*.o kernel/drivers/*.o kernel/net/*.o
+	find . -name '*.d' -delete 2>/dev/null || true
 	rm -rf $(ISO_DIR)
+
+# Include auto-generated header dependencies
+-include $(C_DEPS)

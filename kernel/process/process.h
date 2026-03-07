@@ -5,7 +5,7 @@
 
 #define MAX_PROCESSES   64
 #define PROCESS_STACK_SIZE 8192   /* 8KB per process kernel stack */
-#define PROCESS_MAX_FDS 16
+#define PROCESS_MAX_FDS 32
 
 /* File descriptor types */
 #define FD_NONE         0
@@ -15,6 +15,7 @@
 #define FD_CONSOLE      4   /* stdin/stdout/stderr */
 #define FD_DEVICE       5   /* device files in /dev */
 #define FD_EXT2         6   /* ext2 filesystem files/dirs */
+#define FD_SOCKET       7   /* network socket */
 
 struct process_fd {
     int type;           /* FD_NONE, FD_VFS, FD_PIPE_READ, FD_PIPE_WRITE, FD_CONSOLE, FD_DEVICE, FD_EXT2 */

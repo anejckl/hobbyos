@@ -28,4 +28,8 @@ void signal_send(uint32_t pid, int sig);
  * May modify frame to redirect execution to signal handler. */
 void signal_check(struct process *proc, struct interrupt_frame *frame);
 
+/* Returns true if process has a pending fatal signal (SIGINT, SIGKILL, SIGTERM).
+ * Used by kernel blocking loops to break out early for signal delivery. */
+bool signal_has_fatal(struct process *proc);
+
 #endif /* SIGNAL_H */

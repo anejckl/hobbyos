@@ -17,6 +17,8 @@
 #include "../memory/user_access.h"
 #include "../string.h"
 #include "../debug/debug.h"
+#include "../net/socket.h"
+#include "../net/tcp.h"
 
 /* Initialize FD table for a process with console on 0/1/2 */
 void process_fd_init(struct process *proc) {
@@ -106,6 +108,10 @@ static void syscall_handler(struct interrupt_frame *frame) {
             } else {
                 frame->rax = (uint64_t)-1;
             }
+        } else if (fdtype == FD_SOCKET) {
+            int sock_idx = (int)(uint64_t)cur->fd_table[fd].data;
+            int ret = socket_send(sock_idx, (const uint8_t *)buf, (uint32_t)len);
+            frame->rax = (uint64_t)ret;
         } else {
             frame->rax = (uint64_t)-1;
         }
@@ -126,6 +132,9 @@ static void syscall_handler(struct interrupt_frame *frame) {
                 cur->fd_table[i].type = FD_NONE;
             } else if (cur->fd_table[i].type == FD_PIPE_WRITE) {
                 pipe_close_write((struct pipe *)cur->fd_table[i].data);
+                cur->fd_table[i].type = FD_NONE;
+            } else if (cur->fd_table[i].type == FD_SOCKET) {
+                socket_close((int)(uint64_t)cur->fd_table[i].data);
                 cur->fd_table[i].type = FD_NONE;
             }
         }
@@ -280,7 +289,7 @@ static void syscall_handler(struct interrupt_frame *frame) {
         /* 7. Copy parent's FD table to child */
         memcpy(child->fd_table, parent->fd_table, sizeof(parent->fd_table));
 
-        /* Increment refcounts for shared pipes */
+        /* Increment refcounts for shared pipes and sockets */
         for (int i = 0; i < PROCESS_MAX_FDS; i++) {
             if (child->fd_table[i].type == FD_PIPE_READ ||
                 child->fd_table[i].type == FD_PIPE_WRITE) {
@@ -291,6 +300,8 @@ static void syscall_handler(struct interrupt_frame *frame) {
                     /* Access pipe fields directly (defined in pipe.h) */
                     pipe_inc_ref(p, child->fd_table[i].type);
                 }
+            } else if (child->fd_table[i].type == FD_SOCKET) {
+                socket_inc_ref((int)(uint64_t)child->fd_table[i].data);
             }
         }
 
@@ -425,6 +436,10 @@ static void syscall_handler(struct interrupt_frame *frame) {
         } else if (fdtype == FD_CONSOLE) {
             /* stdin: read from TTY */
             int ret = tty_read(buf, (uint32_t)count);
+            frame->rax = (uint64_t)ret;
+        } else if (fdtype == FD_SOCKET) {
+            int sock_idx = (int)(uint64_t)cur->fd_table[fd].data;
+            int ret = socket_recv(sock_idx, buf, (uint32_t)count);
             frame->rax = (uint64_t)ret;
         } else {
             frame->rax = (uint64_t)-1;
@@ -572,6 +587,8 @@ static void syscall_handler(struct interrupt_frame *frame) {
             pipe_close_read((struct pipe *)cur->fd_table[fd].data);
         else if (fdtype == FD_PIPE_WRITE)
             pipe_close_write((struct pipe *)cur->fd_table[fd].data);
+        else if (fdtype == FD_SOCKET)
+            socket_close((int)(uint64_t)cur->fd_table[fd].data);
 
         cur->fd_table[fd].type = FD_NONE;
         cur->fd_table[fd].data = NULL;
@@ -992,6 +1009,191 @@ static void syscall_handler(struct interrupt_frame *frame) {
         }
 
         frame->rax = (uint64_t)ext2_unlink(parent_ino, fname);
+        return;
+    }
+
+    case SYS_SOCKET: {
+        /* sys_socket(domain, type, protocol) — only AF_INET supported */
+        int type = (int)arg2;
+        if ((int)arg1 != AF_INET || (type != SOCK_STREAM && type != SOCK_DGRAM)) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        int sock_idx = socket_create(type);
+        if (sock_idx < 0) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        struct process *cur = scheduler_get_current();
+        int fd = process_fd_alloc(cur, 3);
+        if (fd < 0) {
+            socket_close(sock_idx);
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        cur->fd_table[fd].type = FD_SOCKET;
+        cur->fd_table[fd].data = (void *)(uint64_t)sock_idx;
+        cur->fd_table[fd].offset = 0;
+        frame->rax = (uint64_t)fd;
+        return;
+    }
+
+    case SYS_BIND: {
+        /* sys_bind(fd, ip, port) */
+        uint64_t fd = arg1;
+        uint32_t ip = (uint32_t)arg2;
+        uint16_t port = (uint16_t)arg3;
+        struct process *cur = scheduler_get_current();
+        if (fd >= PROCESS_MAX_FDS || cur->fd_table[fd].type != FD_SOCKET) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        int sock_idx = (int)(uint64_t)cur->fd_table[fd].data;
+        frame->rax = (uint64_t)socket_bind(sock_idx, ip, port);
+        return;
+    }
+
+    case SYS_LISTEN: {
+        /* sys_listen(fd, backlog) */
+        uint64_t fd = arg1;
+        int backlog = (int)arg2;
+        struct process *cur = scheduler_get_current();
+        if (fd >= PROCESS_MAX_FDS || cur->fd_table[fd].type != FD_SOCKET) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        int sock_idx = (int)(uint64_t)cur->fd_table[fd].data;
+        frame->rax = (uint64_t)socket_listen(sock_idx, backlog);
+        return;
+    }
+
+    case SYS_ACCEPT: {
+        /* sys_accept(fd) */
+        uint64_t fd = arg1;
+        struct process *cur = scheduler_get_current();
+        if (fd >= PROCESS_MAX_FDS || cur->fd_table[fd].type != FD_SOCKET) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        int sock_idx = (int)(uint64_t)cur->fd_table[fd].data;
+        int new_sock = socket_accept(sock_idx);
+        if (new_sock < 0) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        int new_fd = process_fd_alloc(cur, 3);
+        if (new_fd < 0) {
+            socket_close(new_sock);
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        cur->fd_table[new_fd].type = FD_SOCKET;
+        cur->fd_table[new_fd].data = (void *)(uint64_t)new_sock;
+        cur->fd_table[new_fd].offset = 0;
+        frame->rax = (uint64_t)new_fd;
+        return;
+    }
+
+    case SYS_CONNECT: {
+        /* sys_connect(fd, ip, port) */
+        uint64_t fd = arg1;
+        uint32_t ip = (uint32_t)arg2;
+        uint16_t port = (uint16_t)arg3;
+        struct process *cur = scheduler_get_current();
+        if (fd >= PROCESS_MAX_FDS || cur->fd_table[fd].type != FD_SOCKET) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        int sock_idx = (int)(uint64_t)cur->fd_table[fd].data;
+        frame->rax = (uint64_t)socket_connect(sock_idx, ip, port);
+        return;
+    }
+
+    case SYS_SELECT: {
+        /* sys_select(nfds, ptr to select_args) */
+        uint32_t nfds = (uint32_t)arg1;
+        uint8_t *args_ptr = (uint8_t *)arg2;
+
+        if ((uint64_t)args_ptr >= KERNEL_VMA || nfds > PROCESS_MAX_FDS) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        /* select_args: uint32_t readfds, writefds, exceptfds; int32_t timeout_ms */
+        uint32_t readfds, writefds, timeout_raw;
+        memcpy(&readfds, args_ptr, 4);
+        memcpy(&writefds, args_ptr + 4, 4);
+        /* exceptfds at args_ptr + 8 — ignored */
+        memcpy(&timeout_raw, args_ptr + 12, 4);
+        int32_t timeout_ms = (int32_t)timeout_raw;
+
+        struct process *cur = scheduler_get_current();
+        uint32_t ready_read = 0, ready_write = 0;
+        int max_polls = timeout_ms >= 0 ? (timeout_ms / 10 + 1) : 1000;
+
+        for (int poll = 0; poll < max_polls; poll++) {
+            ready_read = 0;
+            ready_write = 0;
+
+            for (uint32_t i = 0; i < nfds; i++) {
+                if (readfds & (1U << i)) {
+                    if (i >= PROCESS_MAX_FDS) continue;
+                    int fdt = cur->fd_table[i].type;
+                    bool readable = false;
+                    if (fdt == FD_PIPE_READ) {
+                        struct pipe *p = (struct pipe *)cur->fd_table[i].data;
+                        readable = p && (p->count > 0 || p->writers == 0);
+                    } else if (fdt == FD_CONSOLE) {
+                        extern bool tty_readable(void);
+                        readable = tty_readable();
+                    } else if (fdt == FD_SOCKET) {
+                        readable = socket_readable((int)(uint64_t)cur->fd_table[i].data);
+                    }
+                    if (readable)
+                        ready_read |= (1U << i);
+                }
+                if (writefds & (1U << i)) {
+                    if (i >= PROCESS_MAX_FDS) continue;
+                    int fdt = cur->fd_table[i].type;
+                    bool writable = false;
+                    if (fdt == FD_PIPE_WRITE) {
+                        struct pipe *p = (struct pipe *)cur->fd_table[i].data;
+                        writable = p && (p->count < PIPE_BUF_SIZE);
+                    } else if (fdt == FD_CONSOLE) {
+                        writable = true;
+                    } else if (fdt == FD_SOCKET) {
+                        writable = socket_writable((int)(uint64_t)cur->fd_table[i].data);
+                    }
+                    if (writable)
+                        ready_write |= (1U << i);
+                }
+            }
+
+            if (ready_read || ready_write)
+                break;
+
+            if (timeout_ms == 0)
+                break;
+
+            /* Brief block — yield to scheduler */
+            cur->state = PROCESS_BLOCKED;
+            schedule();
+            sti();
+        }
+
+        /* Write back results */
+        memcpy(args_ptr, &ready_read, 4);
+        memcpy(args_ptr + 4, &ready_write, 4);
+        uint32_t zero = 0;
+        memcpy(args_ptr + 8, &zero, 4);
+
+        /* Count ready FDs */
+        uint32_t count = 0;
+        for (uint32_t i = 0; i < nfds; i++) {
+            if (ready_read & (1U << i)) count++;
+            if (ready_write & (1U << i)) count++;
+        }
+        frame->rax = (uint64_t)count;
         return;
     }
 

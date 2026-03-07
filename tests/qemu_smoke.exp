@@ -20,6 +20,9 @@ Device registry initialized
 device: registered /dev/null
 device: registered /dev/tty
 devfs: mounted at /dev
+PCI bus enumerated
+e1000: NIC initialized
+network: stack ready
 Interrupts enabled
 # Autotest integration tests
 AUTOTEST: running fork_test
@@ -44,4 +47,8 @@ AUTOTEST: signal_test exited with status 0
 AUTOTEST: running procfs_test
 procfs_test: PASS - read /proc/self/status successfully
 AUTOTEST: procfs_test exited with status 0
+# Network test
+AUTOTEST: running net_test
+net_test: PASS - all socket tests passed
+AUTOTEST: net_test exited with status 0
 AUTOTEST: all tests passed

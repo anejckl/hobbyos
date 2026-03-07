@@ -46,6 +46,7 @@ qemu-system-x86_64 \
     -no-reboot \
     -no-shutdown \
     -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
+    -netdev user,id=net0 -device e1000,netdev=net0 \
     &
 QEMU_PID=$!
 

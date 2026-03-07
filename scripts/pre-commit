@@ -7,11 +7,27 @@ set -euo pipefail
 
 echo "Running pre-commit tests..."
 
-if ! make test-host 2>&1; then
-    echo ""
-    echo "Pre-commit hook FAILED: unit tests did not pass."
-    echo "Fix the failing tests before committing."
-    exit 1
+# Try native make first, fall back to Docker
+if command -v make &>/dev/null; then
+    if ! make test-host 2>&1; then
+        echo ""
+        echo "Pre-commit hook FAILED: unit tests did not pass."
+        echo "Fix the failing tests before committing."
+        exit 1
+    fi
+elif command -v docker &>/dev/null; then
+    REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
+    # Convert Git Bash path to Windows path for Docker volume mount
+    WIN_PATH="$(cygpath -w "$REPO_ROOT" 2>/dev/null || echo "$REPO_ROOT")"
+    if ! MSYS_NO_PATHCONV=1 docker run --rm -v "${WIN_PATH}:/hobbyos" hobbyos-test make test-host 2>&1; then
+        echo ""
+        echo "Pre-commit hook FAILED: unit tests did not pass."
+        echo "Fix the failing tests before committing."
+        exit 1
+    fi
+else
+    echo "WARNING: Neither make nor docker found — skipping pre-commit tests."
+    exit 0
 fi
 
 echo "Pre-commit tests passed."

@@ -120,3 +120,10 @@ void signal_check(struct process *proc, struct interrupt_frame *frame) {
         return;
     }
 }
+
+bool signal_has_fatal(struct process *proc) {
+    if (!proc)
+        return false;
+    uint32_t fatal_mask = (1u << SIGINT) | (1u << SIGKILL) | (1u << SIGTERM);
+    return (proc->sig_pending & fatal_mask) != 0;
+}

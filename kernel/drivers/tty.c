@@ -4,7 +4,6 @@
 #include "../signal/signal.h"
 #include "../process/process.h"
 #include "../scheduler/scheduler.h"
-#include "../debug/debug.h"
 
 static struct tty console_tty;
 
@@ -42,7 +41,6 @@ void tty_input_char(char c) {
             console_tty.input_len--;
             if (console_tty.flags & TTY_ECHO) {
                 vga_putchar('\b');
-                debug_putchar('\b');
             }
         }
         return;
@@ -52,7 +50,6 @@ void tty_input_char(char c) {
     if (c == '\n') {
         if (console_tty.flags & TTY_ECHO) {
             vga_putchar('\n');
-            debug_putchar('\n');
         }
 
         /* Copy input buffer to read buffer */
@@ -79,7 +76,6 @@ void tty_input_char(char c) {
             console_tty.input_buf[console_tty.input_len++] = c;
             if (console_tty.flags & TTY_ECHO) {
                 vga_putchar(c);
-                debug_putchar(c);
             }
         }
     }
@@ -114,7 +110,6 @@ int tty_read(uint8_t *buf, uint32_t count) {
 int tty_write(const uint8_t *buf, uint32_t count) {
     for (uint32_t i = 0; i < count; i++) {
         vga_putchar((char)buf[i]);
-        debug_putchar((char)buf[i]);
     }
     return (int)count;
 }
@@ -125,4 +120,8 @@ void tty_set_fg(uint32_t pid) {
 
 uint32_t tty_get_fg(void) {
     return console_tty.fg_pid;
+}
+
+bool tty_readable(void) {
+    return console_tty.read_len > 0 && console_tty.read_pos < console_tty.read_len;
 }

@@ -16,6 +16,11 @@
 #include "../signal/signal.h"
 #include "../drivers/tty.h"
 #include "../debug/debug.h"
+#include "../net/net.h"
+#include "../net/icmp.h"
+#include "../net/arp.h"
+#include "../drivers/e1000.h"
+#include "../drivers/pit.h"
 
 #define CMD_BUFFER_SIZE 256
 #define MAX_ARGS 16
@@ -53,6 +58,9 @@ static void cmd_fg(int argc, char **argv);
 static void cmd_bg(int argc, char **argv);
 static void cmd_kill(int argc, char **argv);
 static void cmd_cat(int argc, char **argv);
+static void cmd_ping(int argc, char **argv);
+static void cmd_ifconfig(int argc, char **argv);
+static void cmd_arp(int argc, char **argv);
 
 static struct command commands[] = {
     {"help",   "Show available commands",     cmd_help},
@@ -69,6 +77,9 @@ static struct command commands[] = {
     {"bg",     "Show background job status",  cmd_bg},
     {"kill",   "Send signal to process",      cmd_kill},
     {"cat",    "Print file contents",         cmd_cat},
+    {"ping",   "Ping an IP address",          cmd_ping},
+    {"ifconfig","Show network config",        cmd_ifconfig},
+    {"arp",    "Show ARP table",              cmd_arp},
     {NULL, NULL, NULL}
 };
 
@@ -245,9 +256,8 @@ static void cmd_run(int argc, char **argv) {
             if (table2[i].ppid == shell->pid &&
                 table2[i].state != PROCESS_UNUSED &&
                 table2[i].state != PROCESS_TERMINATED &&
-                table2[i].pid > child_pid2) {
+                table2[i].pid > child_pid2)
                 child_pid2 = table2[i].pid;
-            }
         }
         tty_set_fg(child_pid2);
 
@@ -551,6 +561,109 @@ static void cmd_cat(int argc, char **argv) {
     }
 
     vfs_close(fd);
+}
+
+/* Parse dotted-decimal IP string to uint32_t (host byte order) */
+static uint32_t parse_ip(const char *s) {
+    uint32_t octets[4] = {0, 0, 0, 0};
+    int part = 0;
+    while (*s && part < 4) {
+        if (*s >= '0' && *s <= '9') {
+            octets[part] = octets[part] * 10 + (uint32_t)(*s - '0');
+        } else if (*s == '.') {
+            part++;
+        }
+        s++;
+    }
+    return (octets[0] << 24) | (octets[1] << 16) | (octets[2] << 8) | octets[3];
+}
+
+static void cmd_ping(int argc, char **argv) {
+    if (argc < 2) {
+        vga_printf("Usage: ping <ip>\n");
+        return;
+    }
+
+    if (!e1000_is_initialized()) {
+        vga_printf("No network interface\n");
+        return;
+    }
+
+    uint32_t dst_ip = parse_ip(argv[1]);
+    vga_printf("PING %u.%u.%u.%u\n",
+               (uint64_t)((dst_ip >> 24) & 0xFF),
+               (uint64_t)((dst_ip >> 16) & 0xFF),
+               (uint64_t)((dst_ip >> 8) & 0xFF),
+               (uint64_t)(dst_ip & 0xFF));
+
+    struct process *cur = scheduler_get_current();
+    uint16_t ping_id = (uint16_t)(cur->pid & 0xFFFF);
+
+    for (int i = 0; i < 4; i++) {
+        uint16_t seq = (uint16_t)(i + 1);
+        ping_state.waiter = cur;
+        ping_state.id = ping_id;
+        ping_state.seq = seq;
+        ping_state.received = false;
+        ping_state.send_tick = pit_get_ticks();
+
+        if (icmp_send_echo(dst_ip, ping_id, seq) < 0) {
+            vga_printf("  Send failed\n");
+            continue;
+        }
+
+        /* Poll for reply with ~2s timeout (200 ticks at 100Hz) */
+        uint64_t deadline = pit_get_ticks() + 200;
+        while (!ping_state.received && pit_get_ticks() < deadline)
+            hlt();
+
+        if (ping_state.received) {
+            uint64_t rtt_ticks = ping_state.recv_tick - ping_state.send_tick;
+            uint64_t rtt_ms = rtt_ticks * 10; /* Each tick = 10ms at 100Hz */
+            vga_printf("  Reply from %u.%u.%u.%u: seq=%u time=%u ms\n",
+                       (uint64_t)((dst_ip >> 24) & 0xFF),
+                       (uint64_t)((dst_ip >> 16) & 0xFF),
+                       (uint64_t)((dst_ip >> 8) & 0xFF),
+                       (uint64_t)(dst_ip & 0xFF),
+                       (uint64_t)seq, rtt_ms);
+        } else {
+            vga_printf("  Request timed out: seq=%u\n", (uint64_t)seq);
+        }
+    }
+}
+
+static void cmd_ifconfig(int argc, char **argv) {
+    (void)argc; (void)argv;
+
+    if (!e1000_is_initialized()) {
+        vga_printf("No network interface\n");
+        return;
+    }
+
+    uint32_t ip = net_get_ip();
+    uint32_t mask = net_get_netmask();
+    uint32_t gw = net_get_gateway();
+    uint8_t mac[6];
+    e1000_get_mac(mac);
+
+    vga_printf("eth0:\n");
+    vga_printf("  IP:      %u.%u.%u.%u\n",
+               (uint64_t)((ip >> 24) & 0xFF), (uint64_t)((ip >> 16) & 0xFF),
+               (uint64_t)((ip >> 8) & 0xFF), (uint64_t)(ip & 0xFF));
+    vga_printf("  Netmask: %u.%u.%u.%u\n",
+               (uint64_t)((mask >> 24) & 0xFF), (uint64_t)((mask >> 16) & 0xFF),
+               (uint64_t)((mask >> 8) & 0xFF), (uint64_t)(mask & 0xFF));
+    vga_printf("  Gateway: %u.%u.%u.%u\n",
+               (uint64_t)((gw >> 24) & 0xFF), (uint64_t)((gw >> 16) & 0xFF),
+               (uint64_t)((gw >> 8) & 0xFF), (uint64_t)(gw & 0xFF));
+    vga_printf("  MAC:     %x:%x:%x:%x:%x:%x\n",
+               (uint64_t)mac[0], (uint64_t)mac[1], (uint64_t)mac[2],
+               (uint64_t)mac[3], (uint64_t)mac[4], (uint64_t)mac[5]);
+}
+
+static void cmd_arp(int argc, char **argv) {
+    (void)argc; (void)argv;
+    arp_display_table();
 }
 
 static void shell_readline(char *buf, size_t size) {

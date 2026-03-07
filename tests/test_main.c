@@ -38,6 +38,12 @@ int main(void) {
     test_signal_suite();
     printf("\n");
 
+    test_netbuf_suite();
+    printf("\n");
+
+    test_checksum_suite();
+    printf("\n");
+
     printf("=======================\n");
     printf("Results: %d passed, %d failed, %d total\n",
            tests_passed, tests_failed, tests_passed + tests_failed);

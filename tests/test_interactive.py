@@ -3,7 +3,7 @@
 HobbyOS Interactive QEMU Test Suite
 
 Launches QEMU with monitor socket, sends keystrokes via sendkey commands,
-and validates serial output for 18 interactive features across all 5 phases.
+and validates serial output for 20 interactive features across all 5 phases.
 
 Usage: python3 tests/test_interactive.py
 Expects: hobbyos.iso and disk.img in the working directory.
@@ -78,6 +78,8 @@ class QEMUSession:
             "-m", "128M",
             "-no-reboot", "-no-shutdown",
             "-drive", "file=" + DISK_PATH + ",format=raw,if=ide",
+            "-netdev", "user,id=net0",
+            "-device", "e1000,netdev=net0",
         ]
 
         self.process = subprocess.Popen(
@@ -188,7 +190,7 @@ class QEMUSession:
 
 
 def run_tests():
-    """Run all 18 interactive tests."""
+    """Run all 20 interactive tests."""
     overall_start = time.time()
     results = []
 
@@ -394,9 +396,15 @@ def run_tests():
         # --- Test 18: kernel alive ---
         interactive_test("kernel_alive", "mem", "shell> mem")
 
+        # --- Test 19: ifconfig ---
+        interactive_test("ifconfig", "ifconfig", "10.0.2.15")
+
+        # --- Test 20: ping gateway ---
+        interactive_test("ping_gateway", "ping 10.0.2.2", "Reply from", post_delay=5.0)
+
     except RuntimeError as e:
         # Boot failure — fill remaining tests as failed
-        while len(results) < 18:
+        while len(results) < 20:
             results.append({
                 "name": "skipped",
                 "passed": False,

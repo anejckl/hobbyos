@@ -33,4 +33,7 @@ int tty_write(const uint8_t *buf, uint32_t count);
 void tty_set_fg(uint32_t pid);
 uint32_t tty_get_fg(void);
 
+/* Check if TTY has data ready to read */
+bool tty_readable(void);
+
 #endif /* TTY_H */

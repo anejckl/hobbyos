@@ -1,5 +1,6 @@
 #include "vga.h"
 #include "../string.h"
+#include "../debug/debug.h"
 
 /* Use variadic arguments via GCC builtins */
 typedef __builtin_va_list va_list;
@@ -64,6 +65,12 @@ void vga_set_color(uint8_t fg, uint8_t bg) {
 }
 
 void vga_putchar(char c) {
+    if (debug_serial_ready) {
+        if (c == '\n')
+            debug_putchar('\r');
+        debug_putchar(c);
+    }
+
     if (c == '\n') {
         vga_col = 0;
         vga_row++;
@@ -110,7 +117,8 @@ uint16_t vga_get_row(void) { return vga_row; }
 uint16_t vga_get_col(void) { return vga_col; }
 
 /* Simple integer to string conversion */
-static void print_uint(uint64_t val, int base, int pad_zero, int width) {
+static void print_uint(uint64_t val, int base, int pad_zero, int width,
+                       int left_align) {
     char buf[24];
     int i = 0;
     const char *digits = "0123456789abcdef";
@@ -124,21 +132,28 @@ static void print_uint(uint64_t val, int base, int pad_zero, int width) {
         }
     }
 
-    /* Pad if needed */
-    while (i < width)
-        buf[i++] = pad_zero ? '0' : ' ';
-
-    /* Print in reverse */
-    for (int j = i - 1; j >= 0; j--)
-        vga_putchar(buf[j]);
+    if (left_align) {
+        /* Print digits first, then pad with spaces */
+        for (int j = i - 1; j >= 0; j--)
+            vga_putchar(buf[j]);
+        for (int j = i; j < width; j++)
+            vga_putchar(' ');
+    } else {
+        /* Pad first, then digits */
+        while (i < width)
+            buf[i++] = pad_zero ? '0' : ' ';
+        for (int j = i - 1; j >= 0; j--)
+            vga_putchar(buf[j]);
+    }
 }
 
-static void print_int(int64_t val) {
+static void print_int(int64_t val, int width, int left_align) {
     if (val < 0) {
         vga_putchar('-');
         val = -val;
+        if (width > 0) width--;
     }
-    print_uint((uint64_t)val, 10, 0, 0);
+    print_uint((uint64_t)val, 10, 0, width, left_align);
 }
 
 void vga_printf(const char *fmt, ...) {
@@ -152,9 +167,14 @@ void vga_printf(const char *fmt, ...) {
         }
         fmt++;
 
-        /* Check for zero-pad and width */
+        /* Check for flags, zero-pad and width */
+        int left_align = 0;
         int pad_zero = 0;
         int width = 0;
+        if (*fmt == '-') {
+            left_align = 1;
+            fmt++;
+        }
         if (*fmt == '0') {
             pad_zero = 1;
             fmt++;
@@ -167,28 +187,34 @@ void vga_printf(const char *fmt, ...) {
         switch (*fmt) {
         case 's': {
             const char *s = va_arg(ap, const char *);
-            vga_puts(s ? s : "(null)");
+            if (!s) s = "(null)";
+            vga_puts(s);
+            if (left_align) {
+                int len = (int)strlen(s);
+                for (int j = len; j < width; j++)
+                    vga_putchar(' ');
+            }
             break;
         }
         case 'd': {
             int64_t val = va_arg(ap, int64_t);
-            print_int(val);
+            print_int(val, width, left_align);
             break;
         }
         case 'u': {
             uint64_t val = va_arg(ap, uint64_t);
-            print_uint(val, 10, pad_zero, width);
+            print_uint(val, 10, pad_zero, width, left_align);
             break;
         }
         case 'x': {
             uint64_t val = va_arg(ap, uint64_t);
-            print_uint(val, 16, pad_zero, width);
+            print_uint(val, 16, pad_zero, width, left_align);
             break;
         }
         case 'p': {
             uint64_t val = va_arg(ap, uint64_t);
             vga_puts("0x");
-            print_uint(val, 16, 1, 16);
+            print_uint(val, 16, 1, 16, 0);
             break;
         }
         case 'c': {

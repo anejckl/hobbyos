@@ -2,6 +2,7 @@
 #include "../process/process.h"
 #include "../arch/x86_64/tss.h"
 #include "../debug/debug.h"
+#include "../net/net.h"
 
 static struct process *current_process = NULL;
 static struct process *ready_queue_head = NULL;
@@ -51,6 +52,9 @@ void scheduler_tick(void) {
     tick_count++;
     if (!scheduler_enabled)
         return;
+
+    /* Network timer (every tick = 10ms at 100Hz) */
+    net_tick();
 
     /* Schedule every 10 ticks (~100ms at 100Hz) */
     if (tick_count % 10 == 0)

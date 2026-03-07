@@ -32,6 +32,12 @@ typedef uint64_t           size_t;
 
 #define SYS_GETDENTS    17
 #define SYS_STAT        18
+#define SYS_SOCKET      19
+#define SYS_BIND        20
+#define SYS_LISTEN      21
+#define SYS_ACCEPT      22
+#define SYS_CONNECT     23
+#define SYS_SELECT      24
 
 /* Open flags */
 #define O_CREAT         0x40
@@ -170,6 +176,49 @@ static inline int64_t sys_getdents(int fd, void *buf, uint64_t size) {
 
 static inline int64_t sys_stat(const char *path, struct stat_buf *sb) {
     return (int64_t)syscall2(SYS_STAT, (uint64_t)path, (uint64_t)sb);
+}
+
+/* Socket constants */
+#define AF_INET     2
+#define SOCK_STREAM 2
+#define SOCK_DGRAM  1
+
+/* fd_set macros (max 32 FDs) */
+typedef uint32_t fd_set_t;
+#define FD_ZERO(s)       (*(s) = 0)
+#define FD_SET(fd, s)    (*(s) |= (1U << (fd)))
+#define FD_CLR(fd, s)    (*(s) &= ~(1U << (fd)))
+#define FD_ISSET(fd, s)  (*(s) & (1U << (fd)))
+
+struct select_args {
+    uint32_t readfds;
+    uint32_t writefds;
+    uint32_t exceptfds;
+    int32_t timeout_ms;
+};
+
+static inline int64_t sys_socket(int domain, int type, int protocol) {
+    return (int64_t)syscall3(SYS_SOCKET, (uint64_t)domain, (uint64_t)type, (uint64_t)protocol);
+}
+
+static inline int64_t sys_bind(int fd, uint32_t ip, uint16_t port) {
+    return (int64_t)syscall3(SYS_BIND, (uint64_t)fd, (uint64_t)ip, (uint64_t)port);
+}
+
+static inline int64_t sys_listen(int fd, int backlog) {
+    return (int64_t)syscall2(SYS_LISTEN, (uint64_t)fd, (uint64_t)backlog);
+}
+
+static inline int64_t sys_accept(int fd) {
+    return (int64_t)syscall1(SYS_ACCEPT, (uint64_t)fd);
+}
+
+static inline int64_t sys_connect(int fd, uint32_t ip, uint16_t port) {
+    return (int64_t)syscall3(SYS_CONNECT, (uint64_t)fd, (uint64_t)ip, (uint64_t)port);
+}
+
+static inline int64_t sys_select(int nfds, struct select_args *args) {
+    return (int64_t)syscall2(SYS_SELECT, (uint64_t)nfds, (uint64_t)args);
 }
 
 /* User argv address (set by kernel before process starts) */

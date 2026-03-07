@@ -76,7 +76,7 @@ git commit --allow-empty -m "Trigger CI" && git push
 
 ### Interactive Test Output (`make test-interactive`)
 
-Runs 18 tests by sending keystrokes to QEMU via monitor socket and checking serial output. Creates a fresh ext2 disk image, boots the OS, waits for autotests to pass, then exercises shell commands, user programs, ext2 operations, TTY editing, and Ctrl+C.
+Runs 20 tests by sending keystrokes to QEMU via monitor socket and checking serial output. Creates a fresh ext2 disk image, boots the OS, waits for autotests to pass, then exercises shell commands, user programs, ext2 operations, TTY editing, and Ctrl+C.
 
 **Output files:**
 - `tests/interactive_serial.log` — Full serial transcript from QEMU
@@ -84,7 +84,7 @@ Runs 18 tests by sending keystrokes to QEMU via monitor socket and checking seri
 
 **JSON format:**
 ```json
-{"total": 18, "passed": 18, "failed": 0, "tests": [{"name": "boot_and_autotests", "passed": true, ...}, ...]}
+{"total": 20, "passed": 20, "failed": 0, "tests": [{"name": "boot_and_autotests", "passed": true, ...}, ...]}
 ```
 
 **For AI agents:** After running `make test-interactive`, read `tests/interactive_results.json` to see which tests passed/failed and inspect `tests/interactive_serial.log` for debugging.
@@ -245,7 +245,7 @@ hobbyos/
     ├── test_printf.c           # Tests printf integer formatting (replicated logic)
     ├── qemu_smoke.sh           # QEMU boot smoke test script
     ├── qemu_smoke.exp          # Expected serial output patterns
-    └── test_interactive.py     # Interactive QEMU test suite (18 tests, sendkey-based)
+    └── test_interactive.py     # Interactive QEMU test suite (20 tests, sendkey-based)
 ```
 
 ## Architecture Quick Reference
@@ -343,6 +343,7 @@ In `kernel/shell/shell.c`:
 /* 1. Add the handler function (above the commands[] array) */
 static void cmd_mycommand(int argc, char **argv) {
     (void)argc; (void)argv;  /* suppress unused warnings */
+    /* vga_printf auto-mirrors to serial — no need for separate debug_printf */
     vga_printf("My command output\n");
 }
 
@@ -511,4 +512,6 @@ Then:
 
 13. **Per-process address spaces** copy PML4[256] (phys direct map) and PML4[511] (kernel) from boot PML4. User pages go in PML4[0]. PTE_USER must be set at ALL page table levels.
 
-14. **`vga_printf` has no width/alignment support** (`%-4u`, `%-10s` print literally). Use manual padding if needed.
+14. **`vga_printf` supports `%-Nu` `%-Ns` `%-Nd` `%-Nx`** (left-aligned with width N), `%0Nu` `%0Nx` (zero-padded), and `%Nu` (right-aligned). All args are 64-bit (see gotcha 9).
+
+15. **`vga_putchar()` auto-mirrors to serial** (COM1) once `debug_init()` completes. Shell commands should use `vga_printf()` — no separate `debug_printf()` needed. Interactive tests validate output via the serial log.

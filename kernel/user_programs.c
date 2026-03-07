@@ -31,6 +31,14 @@ extern const uint8_t _binary_touch_elf_start[];
 extern const uint8_t _binary_touch_elf_end[];
 extern const uint8_t _binary_rm_elf_start[];
 extern const uint8_t _binary_rm_elf_end[];
+extern const uint8_t _binary_net_test_elf_start[];
+extern const uint8_t _binary_net_test_elf_end[];
+extern const uint8_t _binary_nc_elf_start[];
+extern const uint8_t _binary_nc_elf_end[];
+extern const uint8_t _binary_httpd_elf_start[];
+extern const uint8_t _binary_httpd_elf_end[];
+extern const uint8_t _binary_ping_elf_start[];
+extern const uint8_t _binary_ping_elf_end[];
 
 static const struct user_program programs[] = {
     {
@@ -103,6 +111,26 @@ static const struct user_program programs[] = {
         .data = _binary_rm_elf_start,
         .size = 0
     },
+    {
+        .name = "net_test",
+        .data = _binary_net_test_elf_start,
+        .size = 0
+    },
+    {
+        .name = "nc",
+        .data = _binary_nc_elf_start,
+        .size = 0
+    },
+    {
+        .name = "httpd",
+        .data = _binary_httpd_elf_start,
+        .size = 0
+    },
+    {
+        .name = "ping",
+        .data = _binary_ping_elf_start,
+        .size = 0
+    },
     { NULL, NULL, 0 }
 };
 
@@ -135,6 +163,14 @@ static uint64_t program_size(const uint8_t *data) {
         return (uint64_t)(_binary_touch_elf_end - _binary_touch_elf_start);
     if (data == _binary_rm_elf_start)
         return (uint64_t)(_binary_rm_elf_end - _binary_rm_elf_start);
+    if (data == _binary_net_test_elf_start)
+        return (uint64_t)(_binary_net_test_elf_end - _binary_net_test_elf_start);
+    if (data == _binary_nc_elf_start)
+        return (uint64_t)(_binary_nc_elf_end - _binary_nc_elf_start);
+    if (data == _binary_httpd_elf_start)
+        return (uint64_t)(_binary_httpd_elf_end - _binary_httpd_elf_start);
+    if (data == _binary_ping_elf_start)
+        return (uint64_t)(_binary_ping_elf_end - _binary_ping_elf_start);
     return 0;
 }
 

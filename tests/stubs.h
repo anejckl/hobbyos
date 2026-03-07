@@ -44,6 +44,12 @@ static inline void outw(uint16_t port, uint16_t val) {
 static inline uint16_t inw(uint16_t port) {
     (void)port; return 0;
 }
+static inline void outl(uint16_t port, uint32_t val) {
+    (void)port; (void)val;
+}
+static inline uint32_t inl(uint16_t port) {
+    (void)port; return 0;
+}
 static inline void io_wait(void) {}
 
 /* ---- CPU control stubs (no-ops) ---- */

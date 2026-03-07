@@ -3,6 +3,9 @@
 
 #include "../common.h"
 
+/* Serial ready flag — true after debug_init() completes */
+extern bool debug_serial_ready;
+
 /* COM1 serial port */
 #define COM1_PORT 0x3F8
 

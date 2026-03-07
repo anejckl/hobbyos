@@ -34,5 +34,7 @@ void test_elf_suite(void);
 void test_vfs_suite(void);
 void test_pipe_suite(void);
 void test_signal_suite(void);
+void test_netbuf_suite(void);
+void test_checksum_suite(void);
 
 #endif /* TEST_MAIN_H */

@@ -76,9 +76,11 @@ static void keyboard_handler(struct interrupt_frame *frame) {
         c += 32;
 
     /* Ctrl+key: send control character to TTY */
-    if (kb_ctrl && c >= 'a' && c <= 'z') {
-        tty_input_char((char)(c - 'a' + 1));
-        return;
+    if (kb_ctrl) {
+        if (c >= 'a' && c <= 'z') {
+            tty_input_char((char)(c - 'a' + 1));
+            return;
+        }
     }
 
     if (c != 0)

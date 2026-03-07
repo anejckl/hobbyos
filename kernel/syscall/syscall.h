@@ -23,6 +23,12 @@
 #define SYS_UNLINK      16
 #define SYS_GETDENTS    17
 #define SYS_STAT        18
+#define SYS_SOCKET      19
+#define SYS_BIND        20
+#define SYS_LISTEN      21
+#define SYS_ACCEPT      22
+#define SYS_CONNECT     23
+#define SYS_SELECT      24
 
 void syscall_init(void);
 

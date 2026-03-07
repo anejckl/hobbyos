@@ -25,6 +25,11 @@
 #include "fs/devfs.h"
 #include "user_programs.h"
 #include "autotest.h"
+#include "drivers/pci.h"
+#include "drivers/e1000.h"
+#include "net/netbuf.h"
+#include "net/net.h"
+#include "net/tcp.h"
 
 /* Device init forward declarations */
 extern void dev_null_init(void);
@@ -152,6 +157,39 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
             vga_printf("[--] ext2: no valid filesystem found\n");
     } else {
         vga_printf("[--] No ATA disk detected\n");
+    }
+
+    /* PCI bus enumeration */
+    pci_init();
+    vga_printf("[OK] PCI bus enumerated\n");
+    debug_printf("PCI bus enumerated\n");
+
+    /* Network buffer pool */
+    netbuf_init();
+
+    /* E1000 NIC driver */
+    e1000_init();
+    if (e1000_is_initialized()) {
+        uint8_t mac[6];
+        e1000_get_mac(mac);
+        vga_printf("[OK] e1000 NIC initialized (MAC %x:%x:%x:%x:%x:%x)\n",
+                   (uint64_t)mac[0], (uint64_t)mac[1], (uint64_t)mac[2],
+                   (uint64_t)mac[3], (uint64_t)mac[4], (uint64_t)mac[5]);
+    } else {
+        vga_printf("[--] e1000 NIC not found\n");
+    }
+
+    /* TCP state */
+    tcp_init();
+
+    /* Network stack */
+    net_init();
+
+    /* Network worker process (deferred packet processing from e1000 IRQ) */
+    if (e1000_is_initialized()) {
+        struct process *net = process_create("net_worker", net_worker_run);
+        if (net)
+            scheduler_add(net);
     }
 
     /* Enable interrupts */
