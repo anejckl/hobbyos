@@ -5,10 +5,13 @@
 
 /* Signal numbers */
 #define SIGINT   2
+#define SIGFPE   8
 #define SIGKILL  9
+#define SIGSEGV  11
 #define SIGPIPE  13
 #define SIGTERM  15
 #define SIGCHLD  17
+#define SIGTSTP  20
 
 #define SIG_DFL  0
 #define SIG_IGN  1

@@ -44,7 +44,15 @@ static void user_trampoline(void) {
                    GDT_USER_CODE_RPL3, GDT_USER_DATA_RPL3);
 }
 
+int user_process_create_args(const char *name, const uint8_t *data, uint64_t size,
+                             uint32_t ppid, const char *args);
+
 int user_process_create(const char *name, const uint8_t *data, uint64_t size, uint32_t ppid) {
+    return user_process_create_args(name, data, size, ppid, NULL);
+}
+
+int user_process_create_args(const char *name, const uint8_t *data, uint64_t size,
+                             uint32_t ppid, const char *args) {
     /* 1. Validate ELF */
     struct elf_load_result elf_result;
     if (elf_validate(data, size) < 0) {
@@ -76,6 +84,24 @@ int user_process_create(const char *name, const uint8_t *data, uint64_t size, ui
                          stack_phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER) < 0) {
         debug_printf("user_process: failed to map stack page\n");
         return -1;
+    }
+
+    /* 4b. Allocate and map argv page (if args provided) */
+    if (args) {
+        uint64_t argv_phys = pmm_alloc_page();
+        if (argv_phys) {
+            memset(PHYS_TO_VIRT(argv_phys), 0, PAGE_SIZE);
+            /* Copy args string to the page */
+            char *argv_page = (char *)PHYS_TO_VIRT(argv_phys);
+            size_t args_len = strlen(args);
+            if (args_len >= PAGE_SIZE)
+                args_len = PAGE_SIZE - 1;
+            memcpy(argv_page, args, args_len);
+            argv_page[args_len] = '\0';
+
+            user_vm_map_page(pml4_phys, USER_ARGV_ADDR,
+                             argv_phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER);
+        }
     }
 
     /* 5. Create kernel process with trampoline entry */

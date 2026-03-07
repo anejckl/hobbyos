@@ -57,6 +57,7 @@ void signal_check(struct process *proc, struct interrupt_frame *frame) {
             case SIGTERM:
             case SIGINT:
             case SIGPIPE:
+            case SIGTSTP:
                 /* Terminate process */
                 debug_printf("signal: PID %u killed by signal %d\n",
                              (uint64_t)proc->pid, (int64_t)sig);

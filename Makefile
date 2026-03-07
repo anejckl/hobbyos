@@ -54,6 +54,13 @@ C_SRCS = kernel/kernel.c \
          kernel/drivers/keyboard.c \
          kernel/drivers/pit.c \
          kernel/drivers/ata.c \
+         kernel/drivers/tty.c \
+         kernel/drivers/device.c \
+         kernel/drivers/dev_null.c \
+         kernel/drivers/dev_zero.c \
+         kernel/drivers/dev_tty.c \
+         kernel/fs/devfs.c \
+         kernel/memory/user_access.c \
          kernel/shell/shell.c \
          kernel/debug/debug.c \
          kernel/autotest.c
@@ -63,7 +70,7 @@ ASM_OBJS = $(ASM_SRCS:.asm=.o)
 C_OBJS = $(C_SRCS:.c=.o)
 
 # User program embedded objects
-USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test
+USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm
 USER_EMBED_OBJS = $(patsubst %,user/%_embed.o,$(USER_PROGRAMS))
 
 OBJS = $(ASM_OBJS) $(C_OBJS) $(USER_EMBED_OBJS)
@@ -72,7 +79,7 @@ KERNEL_BIN = kernel.bin
 ISO = hobbyos.iso
 ISO_DIR = isodir
 
-.PHONY: all clean iso run debug test test-host test-qemu install-hooks
+.PHONY: all clean iso run debug test test-host test-qemu test-interactive install-hooks
 
 all: $(KERNEL_BIN)
 
@@ -87,7 +94,7 @@ $(KERNEL_BIN): $(OBJS) linker.ld
 
 # --- User program build pipeline ---
 # Compile user .c to .o (with user CFLAGS, not kernel CFLAGS)
-user/%.o: user/%.c user/syscall.h
+user/%.o: user/%.c user/syscall.h user/ulib.h
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
 # Link user .o to .elf using user linker script
@@ -140,6 +147,13 @@ test-host:
 test-qemu: iso
 	bash tests/qemu_smoke.sh
 
+# Interactive QEMU tests (sends keystrokes, checks serial output)
+test-interactive: iso
+	@echo "Creating fresh ext2 disk image..."
+	dd if=/dev/zero of=disk.img bs=1M count=16 2>/dev/null
+	mkfs.ext2 -F disk.img >/dev/null 2>&1
+	python3 tests/test_interactive.py
+
 # Run all tests
 test: test-host test-qemu
 
@@ -150,7 +164,7 @@ install-hooks:
 	@echo "Pre-commit hook installed."
 
 clean:
-	rm -f $(OBJS) $(KERNEL_BIN) $(ISO) tests/run_tests tests/serial_output.log
+	rm -f $(OBJS) $(KERNEL_BIN) $(ISO) tests/run_tests tests/serial_output.log tests/interactive_serial.log tests/interactive_results.json
 	rm -f user/*.o user/*.elf user/*.bin
 	rm -f kernel/elf/*.o kernel/fs/*.o kernel/signal/*.o kernel/drivers/*.o
 	rm -rf $(ISO_DIR)

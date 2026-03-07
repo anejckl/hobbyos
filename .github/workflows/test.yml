@@ -37,3 +37,31 @@ jobs:
 
       - name: Run QEMU smoke test
         run: make test-qemu
+
+  interactive-tests:
+    name: Interactive QEMU Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y nasm gcc binutils make \
+            grub-pc-bin grub-common xorriso mtools \
+            qemu-system-x86 e2fsprogs python3
+
+      - name: Build ISO
+        run: make iso
+
+      - name: Run interactive tests
+        run: make test-interactive
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: interactive-test-results
+          path: |
+            tests/interactive_serial.log
+            tests/interactive_results.json

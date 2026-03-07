@@ -12,6 +12,9 @@
 #include "../fs/pipe.h"
 #include "../fs/ext2.h"
 #include "../signal/signal.h"
+#include "../drivers/tty.h"
+#include "../drivers/device.h"
+#include "../memory/user_access.h"
 #include "../string.h"
 #include "../debug/debug.h"
 
@@ -64,21 +67,39 @@ static void syscall_handler(struct interrupt_frame *frame) {
         int fdtype = cur->fd_table[fd].type;
 
         if (fdtype == FD_CONSOLE) {
-            /* stdout/stderr: write to VGA + serial */
-            for (uint64_t i = 0; i < len; i++)
-                vga_putchar(buf[i]);
-            for (uint64_t i = 0; i < len; i++)
-                debug_putchar(buf[i]);
-            frame->rax = len;
+            /* stdout/stderr: write through TTY */
+            int ret = tty_write((const uint8_t *)buf, (uint32_t)len);
+            frame->rax = (uint64_t)ret;
         } else if (fdtype == FD_PIPE_WRITE) {
             int ret = pipe_write((struct pipe *)cur->fd_table[fd].data,
                                  (const uint8_t *)buf, (uint32_t)len);
             frame->rax = (uint64_t)ret;
+        } else if (fdtype == FD_DEVICE) {
+            struct device *dev = (struct device *)cur->fd_table[fd].data;
+            if (dev && dev->write) {
+                int ret = dev->write(dev, (const uint8_t *)buf, (uint32_t)len);
+                frame->rax = (uint64_t)ret;
+            } else {
+                frame->rax = (uint64_t)-1;
+            }
         } else if (fdtype == FD_VFS) {
             struct vfs_node *node = (struct vfs_node *)cur->fd_table[fd].data;
             if (node && node->ops && node->ops->write) {
                 int ret = node->ops->write(node, cur->fd_table[fd].offset,
                                            len, (const uint8_t *)buf);
+                if (ret > 0)
+                    cur->fd_table[fd].offset += (uint64_t)ret;
+                frame->rax = (uint64_t)ret;
+            } else {
+                frame->rax = (uint64_t)-1;
+            }
+        } else if (fdtype == FD_EXT2) {
+            uint32_t ino = (uint32_t)(uint64_t)cur->fd_table[fd].data;
+            struct ext2_inode inode;
+            if (ext2_read_inode(ino, &inode) == 0) {
+                int ret = ext2_write_file(ino, &inode,
+                                          cur->fd_table[fd].offset,
+                                          len, (const uint8_t *)buf);
                 if (ret > 0)
                     cur->fd_table[fd].offset += (uint64_t)ret;
                 frame->rax = (uint64_t)ret;
@@ -381,9 +402,30 @@ static void syscall_handler(struct interrupt_frame *frame) {
             } else {
                 frame->rax = (uint64_t)-1;
             }
+        } else if (fdtype == FD_DEVICE) {
+            struct device *dev = (struct device *)cur->fd_table[fd].data;
+            if (dev && dev->read) {
+                int ret = dev->read(dev, buf, (uint32_t)count);
+                frame->rax = (uint64_t)ret;
+            } else {
+                frame->rax = (uint64_t)-1;
+            }
+        } else if (fdtype == FD_EXT2) {
+            uint32_t ino = (uint32_t)(uint64_t)cur->fd_table[fd].data;
+            struct ext2_inode inode;
+            if (ext2_read_inode(ino, &inode) == 0) {
+                int ret = ext2_read_file(&inode, cur->fd_table[fd].offset,
+                                         count, buf);
+                if (ret > 0)
+                    cur->fd_table[fd].offset += (uint64_t)ret;
+                frame->rax = (uint64_t)ret;
+            } else {
+                frame->rax = (uint64_t)-1;
+            }
         } else if (fdtype == FD_CONSOLE) {
-            /* stdin: not implemented yet, return 0 */
-            frame->rax = 0;
+            /* stdin: read from TTY */
+            int ret = tty_read(buf, (uint32_t)count);
+            frame->rax = (uint64_t)ret;
         } else {
             frame->rax = (uint64_t)-1;
         }
@@ -393,6 +435,7 @@ static void syscall_handler(struct interrupt_frame *frame) {
     case SYS_OPEN: {
         /* sys_open(path, flags) */
         const char *path = (const char *)arg1;
+        uint64_t flags = arg2;
 
         if ((uint64_t)path >= KERNEL_VMA) {
             frame->rax = (uint64_t)-1;
@@ -400,6 +443,26 @@ static void syscall_handler(struct interrupt_frame *frame) {
         }
 
         struct process *cur = scheduler_get_current();
+
+        /* Check for /dev/ paths -> device FD */
+        if (strncmp(path, "/dev/", 5) == 0) {
+            const char *devname = path + 5;
+            struct device *dev = device_find(devname);
+            if (!dev) {
+                frame->rax = (uint64_t)-1;
+                return;
+            }
+            int fd = process_fd_alloc(cur, 3);
+            if (fd < 0) {
+                frame->rax = (uint64_t)-1;
+                return;
+            }
+            cur->fd_table[fd].type = FD_DEVICE;
+            cur->fd_table[fd].data = dev;
+            cur->fd_table[fd].offset = 0;
+            frame->rax = (uint64_t)fd;
+            return;
+        }
 
         /* Check mount points first (e.g., /proc) */
         struct vfs_ops *mount_ops = vfs_get_mount_ops(path);
@@ -416,6 +479,59 @@ static void syscall_handler(struct interrupt_frame *frame) {
         } else {
             node = vfs_lookup(path);
             if (!node) {
+                /* Try ext2 filesystem */
+                if (ext2_is_mounted()) {
+                    uint32_t ino = ext2_path_lookup(path);
+                    if (ino) {
+                        /* Found on ext2 — create FD_EXT2 */
+                        int fd = process_fd_alloc(cur, 3);
+                        if (fd < 0) {
+                            frame->rax = (uint64_t)-1;
+                            return;
+                        }
+                        cur->fd_table[fd].type = FD_EXT2;
+                        cur->fd_table[fd].data = (void *)(uint64_t)ino;
+                        cur->fd_table[fd].offset = 0;
+                        frame->rax = (uint64_t)fd;
+                        return;
+                    }
+
+                    /* O_CREAT: create file on ext2 if not found */
+                    if (flags & 0x40) {
+                        char pathbuf[256];
+                        strncpy(pathbuf, path, sizeof(pathbuf) - 1);
+                        pathbuf[sizeof(pathbuf) - 1] = '\0';
+                        char *last_slash = NULL;
+                        for (char *p = pathbuf; *p; p++) {
+                            if (*p == '/') last_slash = p;
+                        }
+                        uint32_t parent_ino = EXT2_ROOT_INODE;
+                        const char *fname = pathbuf;
+                        if (last_slash && last_slash != pathbuf) {
+                            *last_slash = '\0';
+                            parent_ino = ext2_path_lookup(pathbuf);
+                            fname = last_slash + 1;
+                        } else if (last_slash == pathbuf) {
+                            fname = pathbuf + 1;
+                        }
+                        if (parent_ino && *fname) {
+                            uint32_t new_ino = ext2_create(parent_ino, fname,
+                                                           EXT2_S_IFREG | 0644);
+                            if (new_ino) {
+                                int fd = process_fd_alloc(cur, 3);
+                                if (fd < 0) {
+                                    frame->rax = (uint64_t)-1;
+                                    return;
+                                }
+                                cur->fd_table[fd].type = FD_EXT2;
+                                cur->fd_table[fd].data = (void *)(uint64_t)new_ino;
+                                cur->fd_table[fd].offset = 0;
+                                frame->rax = (uint64_t)fd;
+                                return;
+                            }
+                        }
+                    }
+                }
                 frame->rax = (uint64_t)-1;
                 return;
             }
@@ -606,6 +722,276 @@ static void syscall_handler(struct interrupt_frame *frame) {
     case SYS_GETPPID: {
         struct process *cur = scheduler_get_current();
         frame->rax = (uint64_t)cur->ppid;
+        return;
+    }
+
+    case SYS_GETDENTS: {
+        /* sys_getdents(fd, buf, size) - read directory entries
+         * buf format: repeated [uint32_t inode, uint8_t name_len, char name[]] */
+        uint64_t fd = arg1;
+        uint8_t *buf = (uint8_t *)arg2;
+        uint64_t buf_size = arg3;
+
+        if ((uint64_t)buf >= KERNEL_VMA || (uint64_t)buf + buf_size >= KERNEL_VMA) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        struct process *cur = scheduler_get_current();
+        if (fd >= PROCESS_MAX_FDS || cur->fd_table[fd].type == FD_NONE) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        /* Use fd offset as directory index counter */
+        int fdtype = cur->fd_table[fd].type;
+        uint32_t bytes_written = 0;
+
+        if (fdtype == FD_VFS) {
+            struct vfs_node *node = (struct vfs_node *)cur->fd_table[fd].data;
+            if (node && node->ops && node->ops->readdir) {
+                char name[32];
+                uint32_t idx = (uint32_t)cur->fd_table[fd].offset;
+                while (bytes_written + 37 < buf_size) {
+                    if (node->ops->readdir(node, idx, name, sizeof(name)) < 0)
+                        break;
+                    uint8_t nlen = (uint8_t)strlen(name);
+                    uint32_t entry_size = 5 + nlen;  /* inode(4) + name_len(1) + name */
+                    if (bytes_written + entry_size > buf_size)
+                        break;
+                    /* inode = 0 (unknown) */
+                    memset(buf + bytes_written, 0, 4);
+                    buf[bytes_written + 4] = nlen;
+                    memcpy(buf + bytes_written + 5, name, nlen);
+                    bytes_written += entry_size;
+                    idx++;
+                }
+                cur->fd_table[fd].offset = (uint64_t)idx;
+            } else if (node) {
+                /* Root "/" — RAMFS has no readdir; enumerate VFS nodes + ext2 */
+                char name[32];
+                uint32_t idx = 0;
+                while (bytes_written + 37 < buf_size) {
+                    if (vfs_readdir("/", idx, name, sizeof(name)) < 0)
+                        break;
+                    uint8_t nlen = (uint8_t)strlen(name);
+                    uint32_t entry_size = 5 + nlen;
+                    if (bytes_written + entry_size > buf_size)
+                        break;
+                    memset(buf + bytes_written, 0, 4);
+                    buf[bytes_written + 4] = nlen;
+                    memcpy(buf + bytes_written + 5, name, nlen);
+                    bytes_written += entry_size;
+                    idx++;
+                }
+                /* Also include ext2 root entries */
+                if (ext2_is_mounted()) {
+                    struct ext2_inode root_inode;
+                    if (ext2_read_inode(EXT2_ROOT_INODE, &root_inode) == 0) {
+                        uint8_t dir_buf[4096];
+                        uint32_t dir_size = root_inode.i_size;
+                        if (dir_size > sizeof(dir_buf))
+                            dir_size = sizeof(dir_buf);
+                        int rd = ext2_read_file(&root_inode, 0, dir_size, dir_buf);
+                        if (rd > 0) {
+                            uint32_t pos = 0;
+                            while (pos < (uint32_t)rd) {
+                                struct ext2_dir_entry *de =
+                                    (struct ext2_dir_entry *)(dir_buf + pos);
+                                if (de->rec_len == 0) break;
+                                if (de->inode != 0 && de->name_len > 0) {
+                                    char *de_name = (char *)(dir_buf + pos +
+                                                    sizeof(struct ext2_dir_entry));
+                                    uint8_t nlen2 = de->name_len;
+                                    /* Skip . and .. */
+                                    if (!(nlen2 == 1 && de_name[0] == '.') &&
+                                        !(nlen2 == 2 && de_name[0] == '.' && de_name[1] == '.')) {
+                                        uint32_t entry_size = 5 + nlen2;
+                                        if (bytes_written + entry_size > buf_size)
+                                            break;
+                                        memcpy(buf + bytes_written, &de->inode, 4);
+                                        buf[bytes_written + 4] = nlen2;
+                                        memcpy(buf + bytes_written + 5, de_name, nlen2);
+                                        bytes_written += entry_size;
+                                    }
+                                }
+                                pos += de->rec_len;
+                            }
+                        }
+                    }
+                }
+            }
+        } else if (fdtype == FD_EXT2) {
+            /* Read ext2 directory entries */
+            uint32_t ino = (uint32_t)(uint64_t)cur->fd_table[fd].data;
+            struct ext2_inode inode;
+            if (ext2_read_inode(ino, &inode) == 0 &&
+                (inode.i_mode & EXT2_S_IFDIR)) {
+                /* Read directory data into a temp buffer */
+                uint32_t dir_size = inode.i_size;
+                uint8_t dir_buf[4096];
+                if (dir_size > sizeof(dir_buf))
+                    dir_size = sizeof(dir_buf);
+                int rd = ext2_read_file(&inode, 0, dir_size, dir_buf);
+                if (rd > 0) {
+                    uint32_t pos = 0;
+                    while (pos < (uint32_t)rd) {
+                        struct ext2_dir_entry *de =
+                            (struct ext2_dir_entry *)(dir_buf + pos);
+                        if (de->rec_len == 0)
+                            break;
+                        if (de->inode != 0 && de->name_len > 0) {
+                            char *de_name = (char *)(dir_buf + pos +
+                                            sizeof(struct ext2_dir_entry));
+                            uint8_t nlen = de->name_len;
+                            uint32_t entry_size = 5 + nlen;
+                            if (bytes_written + entry_size > buf_size)
+                                break;
+                            /* inode number */
+                            memcpy(buf + bytes_written, &de->inode, 4);
+                            buf[bytes_written + 4] = nlen;
+                            memcpy(buf + bytes_written + 5, de_name, nlen);
+                            bytes_written += entry_size;
+                        }
+                        pos += de->rec_len;
+                    }
+                }
+            }
+        }
+
+        frame->rax = (uint64_t)bytes_written;
+        return;
+    }
+
+    case SYS_STAT: {
+        /* sys_stat(path, stat_buf) */
+        const char *path = (const char *)arg1;
+        uint8_t *sbuf = (uint8_t *)arg2;
+
+        if ((uint64_t)path >= KERNEL_VMA || (uint64_t)sbuf >= KERNEL_VMA) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        /* Try ext2 first */
+        if (ext2_is_mounted()) {
+            uint32_t ino = ext2_path_lookup(path);
+            if (ino) {
+                struct ext2_inode inode;
+                if (ext2_read_inode(ino, &inode) == 0) {
+                    /* type (uint32_t) */
+                    uint32_t ftype = (inode.i_mode & EXT2_S_IFDIR) ? 2 : 1;
+                    memcpy(sbuf, &ftype, 4);
+                    /* size (uint32_t) */
+                    memcpy(sbuf + 4, &inode.i_size, 4);
+                    /* inode (uint32_t) */
+                    memcpy(sbuf + 8, &ino, 4);
+                    frame->rax = 0;
+                    return;
+                }
+            }
+        }
+
+        /* Try VFS */
+        struct vfs_node *node = vfs_lookup(path);
+        if (node) {
+            uint32_t ftype = (node->type == VFS_DIRECTORY) ? 2 : 1;
+            memcpy(sbuf, &ftype, 4);
+            uint32_t fsize = (uint32_t)node->size;
+            memcpy(sbuf + 4, &fsize, 4);
+            uint32_t zero = 0;
+            memcpy(sbuf + 8, &zero, 4);
+            frame->rax = 0;
+            return;
+        }
+
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    case SYS_MKDIR: {
+        /* sys_mkdir(path) */
+        const char *path = (const char *)arg1;
+
+        if ((uint64_t)path >= KERNEL_VMA) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        if (!ext2_is_mounted()) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        /* Split path into parent + name */
+        char pathbuf[256];
+        strncpy(pathbuf, path, sizeof(pathbuf) - 1);
+        pathbuf[sizeof(pathbuf) - 1] = '\0';
+
+        char *last_slash = NULL;
+        for (char *p = pathbuf; *p; p++) {
+            if (*p == '/') last_slash = p;
+        }
+
+        uint32_t parent_ino = EXT2_ROOT_INODE;
+        const char *dirname = pathbuf;
+        if (last_slash && last_slash != pathbuf) {
+            *last_slash = '\0';
+            parent_ino = ext2_path_lookup(pathbuf);
+            dirname = last_slash + 1;
+        } else if (last_slash == pathbuf) {
+            dirname = pathbuf + 1;
+        }
+
+        if (!parent_ino || !*dirname) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        uint32_t ino = ext2_mkdir(parent_ino, dirname);
+        frame->rax = ino ? 0 : (uint64_t)-1;
+        return;
+    }
+
+    case SYS_UNLINK: {
+        /* sys_unlink(path) */
+        const char *path = (const char *)arg1;
+
+        if ((uint64_t)path >= KERNEL_VMA) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        if (!ext2_is_mounted()) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        char pathbuf[256];
+        strncpy(pathbuf, path, sizeof(pathbuf) - 1);
+        pathbuf[sizeof(pathbuf) - 1] = '\0';
+
+        char *last_slash = NULL;
+        for (char *p = pathbuf; *p; p++) {
+            if (*p == '/') last_slash = p;
+        }
+
+        uint32_t parent_ino = EXT2_ROOT_INODE;
+        const char *fname = pathbuf;
+        if (last_slash && last_slash != pathbuf) {
+            *last_slash = '\0';
+            parent_ino = ext2_path_lookup(pathbuf);
+            fname = last_slash + 1;
+        } else if (last_slash == pathbuf) {
+            fname = pathbuf + 1;
+        }
+
+        if (!parent_ino || !*fname) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        frame->rax = (uint64_t)ext2_unlink(parent_ino, fname);
         return;
     }
 

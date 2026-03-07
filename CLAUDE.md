@@ -11,6 +11,7 @@ make clean        # Remove all build artifacts
 make test         # Run all tests (host unit tests + QEMU smoke test)
 make test-host    # Run host-side unit tests only (fast, no QEMU)
 make test-qemu    # Run QEMU boot smoke test only (requires 'make iso')
+make test-interactive  # Interactive QEMU tests (~60-90s, sends keystrokes, checks serial)
 make install-hooks # Install git pre-commit hook (runs test-host)
 ```
 
@@ -29,6 +30,7 @@ MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hob
 MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test make test-host
 MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test make iso
 MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test make test-qemu
+MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test make test-interactive
 ```
 
 ### Critical: Docker Volume Mount on Windows/MSYS2
@@ -71,6 +73,21 @@ gh run rerun <run-id>
 # push an empty commit to trigger a fresh run:
 git commit --allow-empty -m "Trigger CI" && git push
 ```
+
+### Interactive Test Output (`make test-interactive`)
+
+Runs 18 tests by sending keystrokes to QEMU via monitor socket and checking serial output. Creates a fresh ext2 disk image, boots the OS, waits for autotests to pass, then exercises shell commands, user programs, ext2 operations, TTY editing, and Ctrl+C.
+
+**Output files:**
+- `tests/interactive_serial.log` — Full serial transcript from QEMU
+- `tests/interactive_results.json` — Structured per-test results (name, passed, duration, output_snippet, error)
+
+**JSON format:**
+```json
+{"total": 18, "passed": 18, "failed": 0, "tests": [{"name": "boot_and_autotests", "passed": true, ...}, ...]}
+```
+
+**For AI agents:** After running `make test-interactive`, read `tests/interactive_results.json` to see which tests passed/failed and inspect `tests/interactive_serial.log` for debugging.
 
 ### Line Endings
 
@@ -227,7 +244,8 @@ hobbyos/
     ├── test_pmm.c              # Tests PMM bitmap functions (includes actual source)
     ├── test_printf.c           # Tests printf integer formatting (replicated logic)
     ├── qemu_smoke.sh           # QEMU boot smoke test script
-    └── qemu_smoke.exp          # Expected serial output patterns
+    ├── qemu_smoke.exp          # Expected serial output patterns
+    └── test_interactive.py     # Interactive QEMU test suite (18 tests, sendkey-based)
 ```
 
 ## Architecture Quick Reference

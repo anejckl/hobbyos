@@ -7,6 +7,7 @@ IDT initialized
 Interrupt handlers registered
 PIT initialized at 100Hz
 Keyboard initialized
+TTY subsystem initialized
 PMM:
 VMM initialized
 Kernel heap initialized
@@ -15,6 +16,10 @@ Scheduler initialized
 VFS initialized
 RAMFS mounted
 procfs: mounted at /proc
+Device registry initialized
+device: registered /dev/null
+device: registered /dev/tty
+devfs: mounted at /dev
 Interrupts enabled
 # Autotest integration tests
 AUTOTEST: running fork_test

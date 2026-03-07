@@ -31,6 +31,7 @@ struct vfs_node {
     uint64_t size;
     const uint8_t *data;    /* For RAMFS: pointer to file data */
     struct vfs_ops *ops;
+    uint32_t inode_num;     /* ext2 inode number (0 if not ext2) */
     bool in_use;
 };
 

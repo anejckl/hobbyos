@@ -19,6 +19,18 @@ extern const uint8_t _binary_signal_test_elf_start[];
 extern const uint8_t _binary_signal_test_elf_end[];
 extern const uint8_t _binary_procfs_test_elf_start[];
 extern const uint8_t _binary_procfs_test_elf_end[];
+extern const uint8_t _binary_echo_elf_start[];
+extern const uint8_t _binary_echo_elf_end[];
+extern const uint8_t _binary_ls_elf_start[];
+extern const uint8_t _binary_ls_elf_end[];
+extern const uint8_t _binary_ps_elf_start[];
+extern const uint8_t _binary_ps_elf_end[];
+extern const uint8_t _binary_mkdir_elf_start[];
+extern const uint8_t _binary_mkdir_elf_end[];
+extern const uint8_t _binary_touch_elf_start[];
+extern const uint8_t _binary_touch_elf_end[];
+extern const uint8_t _binary_rm_elf_start[];
+extern const uint8_t _binary_rm_elf_end[];
 
 static const struct user_program programs[] = {
     {
@@ -61,6 +73,36 @@ static const struct user_program programs[] = {
         .data = _binary_procfs_test_elf_start,
         .size = 0
     },
+    {
+        .name = "echo",
+        .data = _binary_echo_elf_start,
+        .size = 0
+    },
+    {
+        .name = "ls",
+        .data = _binary_ls_elf_start,
+        .size = 0
+    },
+    {
+        .name = "ps",
+        .data = _binary_ps_elf_start,
+        .size = 0
+    },
+    {
+        .name = "mkdir",
+        .data = _binary_mkdir_elf_start,
+        .size = 0
+    },
+    {
+        .name = "touch",
+        .data = _binary_touch_elf_start,
+        .size = 0
+    },
+    {
+        .name = "rm",
+        .data = _binary_rm_elf_start,
+        .size = 0
+    },
     { NULL, NULL, 0 }
 };
 
@@ -81,6 +123,18 @@ static uint64_t program_size(const uint8_t *data) {
         return (uint64_t)(_binary_signal_test_elf_end - _binary_signal_test_elf_start);
     if (data == _binary_procfs_test_elf_start)
         return (uint64_t)(_binary_procfs_test_elf_end - _binary_procfs_test_elf_start);
+    if (data == _binary_echo_elf_start)
+        return (uint64_t)(_binary_echo_elf_end - _binary_echo_elf_start);
+    if (data == _binary_ls_elf_start)
+        return (uint64_t)(_binary_ls_elf_end - _binary_ls_elf_start);
+    if (data == _binary_ps_elf_start)
+        return (uint64_t)(_binary_ps_elf_end - _binary_ps_elf_start);
+    if (data == _binary_mkdir_elf_start)
+        return (uint64_t)(_binary_mkdir_elf_end - _binary_mkdir_elf_start);
+    if (data == _binary_touch_elf_start)
+        return (uint64_t)(_binary_touch_elf_end - _binary_touch_elf_start);
+    if (data == _binary_rm_elf_start)
+        return (uint64_t)(_binary_rm_elf_end - _binary_rm_elf_start);
     return 0;
 }
 

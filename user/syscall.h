@@ -27,13 +27,34 @@ typedef uint64_t           size_t;
 #define SYS_SIGACTION   12
 #define SYS_SIGRETURN   13
 #define SYS_GETPPID     14
+#define SYS_MKDIR       15
+#define SYS_UNLINK      16
+
+#define SYS_GETDENTS    17
+#define SYS_STAT        18
+
+/* Open flags */
+#define O_CREAT         0x40
+
+/* Stat file types */
+#define STAT_FILE  1
+#define STAT_DIR   2
+
+struct stat_buf {
+    uint32_t type;      /* STAT_FILE or STAT_DIR */
+    uint32_t size;
+    uint32_t inode;
+};
 
 /* Signal constants */
 #define SIGINT   2
+#define SIGFPE   8
 #define SIGKILL  9
+#define SIGSEGV  11
 #define SIGPIPE  13
 #define SIGTERM  15
 #define SIGCHLD  17
+#define SIGTSTP  20
 
 #define SIG_DFL  ((uint64_t)0)
 #define SIG_IGN  ((uint64_t)1)
@@ -134,5 +155,24 @@ static inline void sys_sigreturn(void) {
 static inline uint64_t sys_getppid(void) {
     return syscall0(SYS_GETPPID);
 }
+
+static inline int64_t sys_mkdir(const char *path) {
+    return (int64_t)syscall1(SYS_MKDIR, (uint64_t)path);
+}
+
+static inline int64_t sys_unlink(const char *path) {
+    return (int64_t)syscall1(SYS_UNLINK, (uint64_t)path);
+}
+
+static inline int64_t sys_getdents(int fd, void *buf, uint64_t size) {
+    return (int64_t)syscall3(SYS_GETDENTS, (uint64_t)fd, (uint64_t)buf, size);
+}
+
+static inline int64_t sys_stat(const char *path, struct stat_buf *sb) {
+    return (int64_t)syscall2(SYS_STAT, (uint64_t)path, (uint64_t)sb);
+}
+
+/* User argv address (set by kernel before process starts) */
+#define USER_ARGV_ADDR  0x600000ULL
 
 #endif /* USER_SYSCALL_H */

@@ -1,4 +1,5 @@
 #include "keyboard.h"
+#include "tty.h"
 #include "../arch/x86_64/isr.h"
 #include "../interrupts/interrupts.h"
 
@@ -34,14 +35,6 @@ static const char scancode_to_ascii_shift[128] = {
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
     0, 0, 0, 0, 0, '-', 0, 0, 0, '+', 0, 0, 0, 0, 0,
 };
-
-static void kb_buffer_push(char c) {
-    uint32_t next = (kb_write_idx + 1) % KB_BUFFER_SIZE;
-    if (next != kb_read_idx) {
-        kb_buffer[kb_write_idx] = c;
-        kb_write_idx = next;
-    }
-}
 
 static void keyboard_handler(struct interrupt_frame *frame) {
     (void)frame;
@@ -82,8 +75,14 @@ static void keyboard_handler(struct interrupt_frame *frame) {
     else if (kb_caps && c >= 'A' && c <= 'Z')
         c += 32;
 
+    /* Ctrl+key: send control character to TTY */
+    if (kb_ctrl && c >= 'a' && c <= 'z') {
+        tty_input_char((char)(c - 'a' + 1));
+        return;
+    }
+
     if (c != 0)
-        kb_buffer_push(c);
+        tty_input_char(c);
 }
 
 void keyboard_init(void) {

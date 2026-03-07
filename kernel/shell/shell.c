@@ -12,7 +12,9 @@
 #include "../fs/vfs.h"
 #include "../fs/ramfs.h"
 #include "../fs/pipe.h"
+#include "../fs/ext2.h"
 #include "../signal/signal.h"
+#include "../drivers/tty.h"
 #include "../debug/debug.h"
 
 #define CMD_BUFFER_SIZE 256
@@ -196,8 +198,27 @@ static void cmd_run(int argc, char **argv) {
         return;
     }
 
+    /* Build argument string from argv[2..] (excluding trailing &) */
+    char arg_str[256];
+    arg_str[0] = '\0';
+    int arg_end = background ? argc - 1 : argc;
+    for (int i = 2; i < arg_end; i++) {
+        if (i > 2) {
+            size_t cur_len = strlen(arg_str);
+            if (cur_len < sizeof(arg_str) - 1) {
+                arg_str[cur_len] = ' ';
+                arg_str[cur_len + 1] = '\0';
+            }
+        }
+        size_t cur_len = strlen(arg_str);
+        strncpy(arg_str + cur_len, argv[i], sizeof(arg_str) - cur_len - 1);
+        arg_str[sizeof(arg_str) - 1] = '\0';
+    }
+
     struct process *shell = scheduler_get_current();
-    if (user_process_create(argv[1], prog_data, prog_size, shell->pid) < 0) {
+    const char *args_ptr = arg_str[0] ? arg_str : NULL;
+    if (user_process_create_args(argv[1], prog_data, prog_size,
+                                  shell->pid, args_ptr) < 0) {
         vga_printf("Failed to create user process\n");
         return;
     }
@@ -217,9 +238,22 @@ static void cmd_run(int argc, char **argv) {
         int job_id = job_add(child_pid, argv[1]);
         vga_printf("[%u] %u\n", (uint64_t)job_id, (uint64_t)child_pid);
     } else {
-        /* Foreground: block until child exits */
+        /* Foreground: set TTY fg, block until child exits */
+        struct process *table2 = process_table_get();
+        uint32_t child_pid2 = 0;
+        for (int i = 0; i < MAX_PROCESSES; i++) {
+            if (table2[i].ppid == shell->pid &&
+                table2[i].state != PROCESS_UNUSED &&
+                table2[i].state != PROCESS_TERMINATED &&
+                table2[i].pid > child_pid2) {
+                child_pid2 = table2[i].pid;
+            }
+        }
+        tty_set_fg(child_pid2);
+
         int32_t status = 0;
         int pid = process_wait_for(0, &status);
+        tty_set_fg(0);
         if (pid > 0) {
             vga_printf("Process %u exited with status %d\n",
                        (uint64_t)pid, (int64_t)status);
@@ -228,13 +262,114 @@ static void cmd_run(int argc, char **argv) {
 }
 
 static void cmd_ls(int argc, char **argv) {
-    (void)argc; (void)argv;
+    const char *path = "/";
+    if (argc >= 2)
+        path = argv[1];
+
+    /* Check for mount point (e.g., /dev, /proc) */
+    struct vfs_ops *mount_ops = vfs_get_mount_ops(path);
+    if (mount_ops && mount_ops->readdir) {
+        struct vfs_node tmp;
+        memset(&tmp, 0, sizeof(tmp));
+        strncpy(tmp.name, path, VFS_MAX_NAME - 1);
+        tmp.ops = mount_ops;
+
+        char name[VFS_MAX_NAME];
+        uint32_t index = 0;
+        while (mount_ops->readdir(&tmp, index, name, sizeof(name)) == 0) {
+            vga_printf("  %s\n", name);
+            index++;
+        }
+        if (index == 0)
+            vga_printf("  (empty)\n");
+        return;
+    }
+
+    /* For non-root paths, try ext2 first */
+    if (strcmp(path, "/") != 0 && ext2_is_mounted()) {
+        uint32_t ino = ext2_path_lookup(path);
+        if (ino) {
+            struct ext2_inode inode;
+            if (ext2_read_inode(ino, &inode) == 0 &&
+                (inode.i_mode & EXT2_S_IFDIR)) {
+                uint8_t dir_buf[4096];
+                uint32_t dir_size = inode.i_size;
+                if (dir_size > sizeof(dir_buf))
+                    dir_size = sizeof(dir_buf);
+                int rd = ext2_read_file(&inode, 0, dir_size, dir_buf);
+                if (rd > 0) {
+                    uint32_t pos = 0;
+                    uint32_t count = 0;
+                    while (pos < (uint32_t)rd) {
+                        struct ext2_dir_entry *de =
+                            (struct ext2_dir_entry *)(dir_buf + pos);
+                        if (de->rec_len == 0)
+                            break;
+                        if (de->inode != 0 && de->name_len > 0) {
+                            char dname[256];
+                            uint8_t nlen = de->name_len;
+                            memcpy(dname, dir_buf + pos +
+                                   sizeof(struct ext2_dir_entry), nlen);
+                            dname[nlen] = '\0';
+                            vga_printf("  %s\n", dname);
+                            count++;
+                        }
+                        pos += de->rec_len;
+                    }
+                    if (count == 0)
+                        vga_printf("  (empty)\n");
+                    return;
+                }
+            }
+        }
+    }
+
+    /* Root or VFS: show RAMFS listing */
     char name[VFS_MAX_NAME];
     uint32_t index = 0;
 
-    while (vfs_readdir("/", index, name, sizeof(name)) == 0) {
+    while (vfs_readdir(path, index, name, sizeof(name)) == 0) {
         vga_printf("  %s\n", name);
         index++;
+    }
+
+    /* For root, also show ext2 root entries (skip . and ..) */
+    if (strcmp(path, "/") == 0 && ext2_is_mounted()) {
+        uint32_t ino = ext2_path_lookup("/");
+        if (ino) {
+            struct ext2_inode inode;
+            if (ext2_read_inode(ino, &inode) == 0 &&
+                (inode.i_mode & EXT2_S_IFDIR)) {
+                uint8_t dir_buf[4096];
+                uint32_t dir_size = inode.i_size;
+                if (dir_size > sizeof(dir_buf))
+                    dir_size = sizeof(dir_buf);
+                int rd = ext2_read_file(&inode, 0, dir_size, dir_buf);
+                if (rd > 0) {
+                    uint32_t pos = 0;
+                    while (pos < (uint32_t)rd) {
+                        struct ext2_dir_entry *de =
+                            (struct ext2_dir_entry *)(dir_buf + pos);
+                        if (de->rec_len == 0)
+                            break;
+                        if (de->inode != 0 && de->name_len > 0) {
+                            char dname[256];
+                            uint8_t nlen = de->name_len;
+                            memcpy(dname, dir_buf + pos +
+                                   sizeof(struct ext2_dir_entry), nlen);
+                            dname[nlen] = '\0';
+                            /* Skip . and .. */
+                            if (!(nlen == 1 && dname[0] == '.') &&
+                                !(nlen == 2 && dname[0] == '.' && dname[1] == '.')) {
+                                vga_printf("  %s\n", dname);
+                                index++;
+                            }
+                        }
+                        pos += de->rec_len;
+                    }
+                }
+            }
+        }
     }
 
     if (index == 0)
@@ -323,8 +458,10 @@ static void cmd_fg(int argc, char **argv) {
     vga_printf("Bringing '%s' (PID %u) to foreground\n",
                j->name, (uint64_t)j->pid);
 
+    tty_set_fg(j->pid);
     int32_t status = 0;
     int pid = process_wait_for(j->pid, &status);
+    tty_set_fg(0);
     if (pid > 0) {
         vga_printf("Process %u exited with status %d\n",
                    (uint64_t)pid, (int64_t)status);
@@ -417,24 +554,19 @@ static void cmd_cat(int argc, char **argv) {
 }
 
 static void shell_readline(char *buf, size_t size) {
-    size_t pos = 0;
-    while (pos < size - 1) {
-        char c = keyboard_getchar();
-
-        if (c == '\n') {
-            vga_putchar('\n');
-            break;
-        } else if (c == '\b') {
-            if (pos > 0) {
-                pos--;
-                vga_putchar('\b');
-            }
-        } else if (c >= ' ' && c <= '~') {
-            buf[pos++] = c;
-            vga_putchar(c);
-        }
+    /* TTY handles echo, backspace, and line buffering.
+     * tty_read blocks until a complete line is ready. */
+    uint8_t tmp[256];
+    int n = tty_read(tmp, (uint32_t)(size - 1));
+    if (n <= 0) {
+        buf[0] = '\0';
+        return;
     }
-    buf[pos] = '\0';
+    /* Strip trailing newline */
+    if (n > 0 && tmp[n - 1] == '\n')
+        n--;
+    memcpy(buf, tmp, (size_t)n);
+    buf[n] = '\0';
 }
 
 /* Execute a single command (no pipe) */

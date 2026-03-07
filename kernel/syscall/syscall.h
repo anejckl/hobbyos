@@ -21,6 +21,8 @@
 #define SYS_GETPPID     14
 #define SYS_MKDIR       15
 #define SYS_UNLINK      16
+#define SYS_GETDENTS    17
+#define SYS_STAT        18
 
 void syscall_init(void);
 

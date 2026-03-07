@@ -31,7 +31,7 @@ struct ext2_superblock {
     uint32_t s_inodes_per_group;
     uint32_t s_mtime;
     uint32_t s_wtime;
-    uint32_t s_mnt_count;
+    uint16_t s_mnt_count;
     uint16_t s_max_mnt_count;
     uint16_t s_magic;
     uint16_t s_state;
@@ -119,5 +119,25 @@ int ext2_read_path(const char *path, uint8_t *buf, uint64_t buf_size);
 
 /* Check if ext2 filesystem is mounted. */
 bool ext2_is_mounted(void);
+
+/* Write file data to an inode. Allocates blocks as needed.
+ * Returns bytes written, or -1 on error. */
+int ext2_write_file(uint32_t ino, struct ext2_inode *inode, uint64_t offset,
+                    uint64_t size, const uint8_t *buf);
+
+/* Write an inode back to disk. Returns 0 on success, -1 on failure. */
+int ext2_write_inode(uint32_t ino, const struct ext2_inode *inode);
+
+/* Create a new regular file in a directory.
+ * Returns new inode number, or 0 on failure. */
+uint32_t ext2_create(uint32_t parent_ino, const char *name, uint16_t mode);
+
+/* Create a new directory with . and .. entries.
+ * Returns new inode number, or 0 on failure. */
+uint32_t ext2_mkdir(uint32_t parent_ino, const char *name);
+
+/* Unlink (remove) a file from a directory.
+ * Returns 0 on success, -1 on failure. */
+int ext2_unlink(uint32_t parent_ino, const char *name);
 
 #endif /* EXT2_H */

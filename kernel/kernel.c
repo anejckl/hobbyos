@@ -20,8 +20,16 @@
 #include "fs/procfs.h"
 #include "fs/ext2.h"
 #include "drivers/ata.h"
+#include "drivers/tty.h"
+#include "drivers/device.h"
+#include "fs/devfs.h"
 #include "user_programs.h"
 #include "autotest.h"
+
+/* Device init forward declarations */
+extern void dev_null_init(void);
+extern void dev_zero_init(void);
+extern void dev_tty_init(void);
 
 /* Multiboot2 constants */
 #define MULTIBOOT2_MAGIC 0x36D76289
@@ -80,6 +88,9 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
     vga_printf("[OK] Keyboard driver initialized\n");
     debug_printf("Keyboard initialized\n");
 
+    tty_init();
+    vga_printf("[OK] TTY subsystem initialized\n");
+
     /* Phase 5: Physical Memory Manager */
     pmm_init(multiboot_info_phys);
     vga_printf("[OK] PMM: %u free pages (%u MB free)\n",
@@ -122,6 +133,14 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
 
     procfs_init();
     vga_printf("[OK] Procfs mounted at /proc\n");
+
+    /* Device framework */
+    device_init();
+    dev_null_init();
+    dev_zero_init();
+    dev_tty_init();
+    devfs_init();
+    vga_printf("[OK] Device framework initialized (/dev)\n");
 
     /* ATA disk driver */
     ata_init();

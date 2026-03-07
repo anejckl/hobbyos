@@ -13,9 +13,11 @@
 #define FD_PIPE_READ    2
 #define FD_PIPE_WRITE   3
 #define FD_CONSOLE      4   /* stdin/stdout/stderr */
+#define FD_DEVICE       5   /* device files in /dev */
+#define FD_EXT2         6   /* ext2 filesystem files/dirs */
 
 struct process_fd {
-    int type;           /* FD_NONE, FD_VFS, FD_PIPE_READ, FD_PIPE_WRITE, FD_CONSOLE */
+    int type;           /* FD_NONE, FD_VFS, FD_PIPE_READ, FD_PIPE_WRITE, FD_CONSOLE, FD_DEVICE, FD_EXT2 */
     void *data;         /* vfs_node* for VFS, pipe* for pipes */
     uint64_t offset;    /* file offset for VFS files */
 };
