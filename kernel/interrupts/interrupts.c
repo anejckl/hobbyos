@@ -17,8 +17,12 @@ static void page_fault_handler(struct interrupt_frame *frame) {
     uint64_t cr2 = read_cr2();
     uint64_t err = frame->err_code;
 
-    /* Check for COW fault: present + write + user (bits 0,1,2 all set) */
-    if ((err & 0x7) == 0x7) {
+    /* Check for COW fault: present + write (bits 0,1 set).
+     * Can be triggered from user mode (err & 0x4) or from kernel mode
+     * when a syscall accesses user-space COW pages (err & 0x4 == 0).
+     * Both cases need to be handled if the faulting address is in
+     * user space (below KERNEL_VMA). */
+    if ((err & 0x3) == 0x3 && cr2 < KERNEL_VMA) {
         struct process *cur = scheduler_get_current();
         if (cur && cur->cr3) {
             if (cow_handle_fault(cur->cr3, cr2) == 0)

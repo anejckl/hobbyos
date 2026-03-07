@@ -11,10 +11,21 @@
 #include "../user_programs.h"
 #include "../fs/vfs.h"
 #include "../fs/ramfs.h"
+#include "../fs/pipe.h"
+#include "../signal/signal.h"
 #include "../debug/debug.h"
 
 #define CMD_BUFFER_SIZE 256
 #define MAX_ARGS 16
+
+/* Job tracking */
+#define MAX_JOBS 8
+struct job {
+    uint32_t pid;
+    char name[32];
+    bool active;
+};
+static struct job jobs[MAX_JOBS];
 
 /* Command function type */
 typedef void (*cmd_func_t)(int argc, char **argv);
@@ -36,6 +47,10 @@ static void cmd_run(int argc, char **argv);
 static void cmd_ls(int argc, char **argv);
 static void cmd_jobs(int argc, char **argv);
 static void cmd_proc(int argc, char **argv);
+static void cmd_fg(int argc, char **argv);
+static void cmd_bg(int argc, char **argv);
+static void cmd_kill(int argc, char **argv);
+static void cmd_cat(int argc, char **argv);
 
 static struct command commands[] = {
     {"help",   "Show available commands",     cmd_help},
@@ -48,8 +63,22 @@ static struct command commands[] = {
     {"ls",     "List files in RAMFS",         cmd_ls},
     {"jobs",   "List active processes",       cmd_jobs},
     {"proc",   "Show process details",        cmd_proc},
+    {"fg",     "Bring job to foreground",     cmd_fg},
+    {"bg",     "Show background job status",  cmd_bg},
+    {"kill",   "Send signal to process",      cmd_kill},
+    {"cat",    "Print file contents",         cmd_cat},
     {NULL, NULL, NULL}
 };
+
+/* Simple string to uint conversion */
+static uint32_t str_to_uint(const char *s) {
+    uint32_t val = 0;
+    while (*s >= '0' && *s <= '9') {
+        val = val * 10 + (uint32_t)(*s - '0');
+        s++;
+    }
+    return val;
+}
 
 static void cmd_help(int argc, char **argv) {
     (void)argc; (void)argv;
@@ -115,6 +144,38 @@ static void cmd_clear(int argc, char **argv) {
     vga_clear();
 }
 
+/* Add a job to the job table, return job ID (1-based) */
+static int job_add(uint32_t pid, const char *name) {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (!jobs[i].active) {
+            jobs[i].pid = pid;
+            strncpy(jobs[i].name, name, sizeof(jobs[i].name) - 1);
+            jobs[i].name[sizeof(jobs[i].name) - 1] = '\0';
+            jobs[i].active = true;
+            return i + 1;
+        }
+    }
+    return -1;
+}
+
+/* Check for completed background jobs and print notifications */
+static void check_bg_jobs(void) {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (jobs[i].active) {
+            struct process *p = process_get_by_pid(jobs[i].pid);
+            if (!p || p->state == PROCESS_ZOMBIE ||
+                p->state == PROCESS_TERMINATED ||
+                p->state == PROCESS_UNUSED) {
+                vga_printf("[%u] Done  %s\n", (uint64_t)(i + 1), jobs[i].name);
+                /* Reap if zombie */
+                if (p && p->state == PROCESS_ZOMBIE)
+                    p->state = PROCESS_TERMINATED;
+                jobs[i].active = false;
+            }
+        }
+    }
+}
+
 static void cmd_run(int argc, char **argv) {
     if (argc < 2) {
         vga_printf("Usage: run <program> [&]\n");
@@ -142,7 +203,19 @@ static void cmd_run(int argc, char **argv) {
     }
 
     if (background) {
-        vga_printf("Started '%s' in background\n", argv[1]);
+        /* Find the just-created process (highest PID child of shell) */
+        struct process *table = process_table_get();
+        uint32_t child_pid = 0;
+        for (int i = 0; i < MAX_PROCESSES; i++) {
+            if (table[i].ppid == shell->pid &&
+                table[i].state != PROCESS_UNUSED &&
+                table[i].state != PROCESS_TERMINATED &&
+                table[i].pid > child_pid) {
+                child_pid = table[i].pid;
+            }
+        }
+        int job_id = job_add(child_pid, argv[1]);
+        vga_printf("[%u] %u\n", (uint64_t)job_id, (uint64_t)child_pid);
     } else {
         /* Foreground: block until child exits */
         int32_t status = 0;
@@ -170,26 +243,28 @@ static void cmd_ls(int argc, char **argv) {
 
 static void cmd_jobs(int argc, char **argv) {
     (void)argc; (void)argv;
-    struct process *table = process_table_get();
-    const char *state_names[] = {
-        "unused", "ready", "running", "blocked", "zombie", "terminated"
-    };
     int count = 0;
 
-    for (int i = 0; i < MAX_PROCESSES; i++) {
-        if (table[i].is_user &&
-            table[i].state != PROCESS_UNUSED &&
-            table[i].state != PROCESS_TERMINATED) {
-            vga_printf("  [%u] %-10s %s\n",
-                       (uint64_t)table[i].pid,
-                       state_names[table[i].state],
-                       table[i].name);
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (jobs[i].active) {
+            struct process *p = process_get_by_pid(jobs[i].pid);
+            const char *st = "unknown";
+            if (p) {
+                const char *state_names[] = {
+                    "unused", "ready", "running", "blocked",
+                    "zombie", "terminated"
+                };
+                st = state_names[p->state];
+            }
+            vga_printf("  [%u] PID=%-4u %-10s %s\n",
+                       (uint64_t)(i + 1),
+                       (uint64_t)jobs[i].pid, st, jobs[i].name);
             count++;
         }
     }
 
     if (count == 0)
-        vga_printf("No active user processes.\n");
+        vga_printf("No background jobs.\n");
 }
 
 static void cmd_proc(int argc, char **argv) {
@@ -198,14 +273,10 @@ static void cmd_proc(int argc, char **argv) {
         return;
     }
 
-    /* Simple string-to-uint conversion */
-    uint32_t pid = 0;
-    for (int i = 0; argv[1][i]; i++) {
-        if (argv[1][i] < '0' || argv[1][i] > '9') {
-            vga_printf("Invalid PID: %s\n", argv[1]);
-            return;
-        }
-        pid = pid * 10 + (uint32_t)(argv[1][i] - '0');
+    uint32_t pid = str_to_uint(argv[1]);
+    if (pid == 0) {
+        vga_printf("Invalid PID: %s\n", argv[1]);
+        return;
     }
 
     struct process *proc = process_get_by_pid(pid);
@@ -224,6 +295,125 @@ static void cmd_proc(int argc, char **argv) {
     vga_printf("State: %s\n", state_names[proc->state]);
     vga_printf("User:  %s\n", proc->is_user ? "yes" : "no");
     vga_printf("CR3:   0x%x\n", proc->cr3);
+
+    /* Show open FDs */
+    vga_printf("FDs:   ");
+    const char *type_names[] = {"none", "vfs", "pipe_r", "pipe_w", "console"};
+    for (int i = 0; i < PROCESS_MAX_FDS; i++) {
+        if (proc->fd_table[i].type != FD_NONE) {
+            vga_printf("%u:%s ", (uint64_t)i, type_names[proc->fd_table[i].type]);
+        }
+    }
+    vga_putchar('\n');
+}
+
+static void cmd_fg(int argc, char **argv) {
+    if (argc < 2) {
+        vga_printf("Usage: fg <job_id>\n");
+        return;
+    }
+
+    uint32_t job_id = str_to_uint(argv[1]);
+    if (job_id < 1 || job_id > MAX_JOBS || !jobs[job_id - 1].active) {
+        vga_printf("No such job: %u\n", (uint64_t)job_id);
+        return;
+    }
+
+    struct job *j = &jobs[job_id - 1];
+    vga_printf("Bringing '%s' (PID %u) to foreground\n",
+               j->name, (uint64_t)j->pid);
+
+    int32_t status = 0;
+    int pid = process_wait_for(j->pid, &status);
+    if (pid > 0) {
+        vga_printf("Process %u exited with status %d\n",
+                   (uint64_t)pid, (int64_t)status);
+    }
+    j->active = false;
+}
+
+static void cmd_bg(int argc, char **argv) {
+    if (argc < 2) {
+        vga_printf("Usage: bg <job_id>\n");
+        return;
+    }
+
+    uint32_t job_id = str_to_uint(argv[1]);
+    if (job_id < 1 || job_id > MAX_JOBS || !jobs[job_id - 1].active) {
+        vga_printf("No such job: %u\n", (uint64_t)job_id);
+        return;
+    }
+
+    vga_printf("[%u] Running  %s (PID %u)\n",
+               (uint64_t)job_id, jobs[job_id - 1].name,
+               (uint64_t)jobs[job_id - 1].pid);
+}
+
+static void cmd_kill(int argc, char **argv) {
+    if (argc < 2) {
+        vga_printf("Usage: kill <pid> [signal]\n");
+        return;
+    }
+
+    uint32_t pid = str_to_uint(argv[1]);
+    int sig = 15;  /* SIGTERM by default */
+    if (argc >= 3)
+        sig = (int)str_to_uint(argv[2]);
+
+    struct process *target = process_get_by_pid(pid);
+    if (!target) {
+        vga_printf("No such process: %u\n", (uint64_t)pid);
+        return;
+    }
+
+    signal_send(pid, sig);
+    vga_printf("Sent signal %d to PID %u\n", (int64_t)sig, (uint64_t)pid);
+}
+
+static void cmd_cat(int argc, char **argv) {
+    if (argc < 2) {
+        vga_printf("Usage: cat <file>\n");
+        return;
+    }
+
+    const char *path = argv[1];
+
+    /* Check if it's a /proc path */
+    struct vfs_ops *mount_ops = vfs_get_mount_ops(path);
+    if (mount_ops) {
+        /* Create a temporary node for procfs */
+        struct vfs_node tmp_node;
+        memset(&tmp_node, 0, sizeof(tmp_node));
+        strncpy(tmp_node.name, path, VFS_MAX_NAME - 1);
+        tmp_node.ops = mount_ops;
+        tmp_node.in_use = true;
+
+        uint8_t buf[512];
+        int bytes = mount_ops->read(&tmp_node, 0, sizeof(buf) - 1, buf);
+        if (bytes > 0) {
+            buf[bytes] = 0;
+            vga_printf("%s", (char *)buf);
+        } else {
+            vga_printf("(empty or error)\n");
+        }
+        return;
+    }
+
+    /* Regular VFS file */
+    int fd = vfs_open(path);
+    if (fd < 0) {
+        vga_printf("File not found: %s\n", path);
+        return;
+    }
+
+    uint8_t buf[256];
+    int bytes;
+    while ((bytes = vfs_read(fd, buf, sizeof(buf) - 1)) > 0) {
+        buf[bytes] = 0;
+        vga_printf("%s", (char *)buf);
+    }
+
+    vfs_close(fd);
 }
 
 static void shell_readline(char *buf, size_t size) {
@@ -247,12 +437,12 @@ static void shell_readline(char *buf, size_t size) {
     buf[pos] = '\0';
 }
 
-static void shell_execute(char *line) {
+/* Execute a single command (no pipe) */
+static void shell_exec_single(char *cmd) {
     char *argv[MAX_ARGS];
     int argc = 0;
 
-    /* Tokenize input */
-    char *token = strtok(line, " \t");
+    char *token = strtok(cmd, " \t");
     while (token && argc < MAX_ARGS) {
         argv[argc++] = token;
         token = strtok(NULL, " \t");
@@ -261,7 +451,6 @@ static void shell_execute(char *line) {
     if (argc == 0)
         return;
 
-    /* Look up command */
     for (int i = 0; commands[i].name; i++) {
         if (strcmp(argv[0], commands[i].name) == 0) {
             commands[i].func(argc, argv);
@@ -271,6 +460,123 @@ static void shell_execute(char *line) {
 
     vga_printf("Unknown command: %s\n", argv[0]);
     vga_printf("Type 'help' for available commands.\n");
+}
+
+/* Check if a command line contains a pipe */
+static char *find_pipe(char *line) {
+    for (char *p = line; *p; p++) {
+        if (*p == '|')
+            return p;
+    }
+    return NULL;
+}
+
+static void shell_execute(char *line) {
+    /* Check for pipe operator */
+    char *pipe_pos = find_pipe(line);
+
+    if (!pipe_pos) {
+        shell_exec_single(line);
+        return;
+    }
+
+    /* Split at pipe: "cmd1 | cmd2" */
+    *pipe_pos = '\0';
+    char *cmd1 = line;
+    char *cmd2 = pipe_pos + 1;
+
+    /* Skip whitespace */
+    while (*cmd2 == ' ' || *cmd2 == '\t') cmd2++;
+
+    /* Parse cmd1 to get the program name */
+    char cmd1_copy[CMD_BUFFER_SIZE];
+    strncpy(cmd1_copy, cmd1, CMD_BUFFER_SIZE - 1);
+    cmd1_copy[CMD_BUFFER_SIZE - 1] = '\0';
+    char *prog1 = strtok(cmd1_copy, " \t");
+
+    char cmd2_copy[CMD_BUFFER_SIZE];
+    strncpy(cmd2_copy, cmd2, CMD_BUFFER_SIZE - 1);
+    cmd2_copy[CMD_BUFFER_SIZE - 1] = '\0';
+    char *prog2 = strtok(cmd2_copy, " \t");
+
+    if (!prog1 || !prog2) {
+        vga_printf("Invalid pipe syntax\n");
+        return;
+    }
+
+    /* Both sides must be user programs */
+    uint64_t size1 = 0, size2 = 0;
+    const uint8_t *data1 = ramfs_get_file_data(prog1, &size1);
+    const uint8_t *data2 = ramfs_get_file_data(prog2, &size2);
+
+    if (!data1) {
+        vga_printf("Program not found: %s\n", prog1);
+        return;
+    }
+    if (!data2) {
+        vga_printf("Program not found: %s\n", prog2);
+        return;
+    }
+
+    /* Create pipe */
+    struct pipe *p = NULL;
+    if (pipe_create(&p) < 0) {
+        vga_printf("Failed to create pipe\n");
+        return;
+    }
+
+    struct process *shell = scheduler_get_current();
+
+    /* Create child1: stdout -> pipe write end */
+    if (user_process_create(prog1, data1, size1, shell->pid) < 0) {
+        vga_printf("Failed to create %s\n", prog1);
+        return;
+    }
+    /* Find the child1 process (most recent child) */
+    struct process *table = process_table_get();
+    struct process *child1 = NULL;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (table[i].ppid == shell->pid &&
+            table[i].state != PROCESS_UNUSED &&
+            table[i].state != PROCESS_TERMINATED &&
+            strcmp(table[i].name, prog1) == 0) {
+            if (!child1 || table[i].pid > child1->pid)
+                child1 = &table[i];
+        }
+    }
+    if (child1) {
+        /* Redirect stdout to pipe write end */
+        child1->fd_table[1].type = FD_PIPE_WRITE;
+        child1->fd_table[1].data = p;
+        p->writers++;  /* Extra writer for child1's fd 1 */
+    }
+
+    /* Create child2: stdin -> pipe read end */
+    if (user_process_create(prog2, data2, size2, shell->pid) < 0) {
+        vga_printf("Failed to create %s\n", prog2);
+        return;
+    }
+    struct process *child2 = NULL;
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (table[i].ppid == shell->pid &&
+            table[i].state != PROCESS_UNUSED &&
+            table[i].state != PROCESS_TERMINATED &&
+            strcmp(table[i].name, prog2) == 0) {
+            if (!child2 || table[i].pid > child2->pid)
+                child2 = &table[i];
+        }
+    }
+    if (child2) {
+        /* Redirect stdin to pipe read end */
+        child2->fd_table[0].type = FD_PIPE_READ;
+        child2->fd_table[0].data = p;
+        p->readers++;  /* Extra reader for child2's fd 0 */
+    }
+
+    /* Wait for both children */
+    int32_t status = 0;
+    process_wait_for(0, &status);
+    process_wait_for(0, &status);
 }
 
 void shell_run(void) {
@@ -284,6 +590,9 @@ void shell_run(void) {
     debug_printf("shell: shell_run started\n");
 
     for (;;) {
+        /* Check for completed background jobs */
+        check_bg_jobs();
+
         vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
         vga_puts("hobbyos");
         vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);

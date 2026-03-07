@@ -2,6 +2,8 @@
 #include "pic.h"
 #include "../../drivers/vga.h"
 #include "../../debug/debug.h"
+#include "../../signal/signal.h"
+#include "../../scheduler/scheduler.h"
 
 static isr_handler_t isr_handlers[256];
 
@@ -63,6 +65,13 @@ void isr_handler(struct interrupt_frame *frame) {
     /* Call registered handler if present */
     if (isr_handlers[int_no]) {
         isr_handlers[int_no](frame);
+
+        /* Check for pending signals before returning to usermode */
+        if (frame->cs & 3) {  /* Came from ring 3 */
+            struct process *cur = scheduler_get_current();
+            if (cur && cur->is_user)
+                signal_check(cur, frame);
+        }
     } else if (int_no < 32) {
         /* Unhandled CPU exception */
         vga_set_color(VGA_WHITE, VGA_RED);

@@ -5,6 +5,20 @@
 
 #define MAX_PROCESSES   64
 #define PROCESS_STACK_SIZE 8192   /* 8KB per process kernel stack */
+#define PROCESS_MAX_FDS 16
+
+/* File descriptor types */
+#define FD_NONE         0
+#define FD_VFS          1
+#define FD_PIPE_READ    2
+#define FD_PIPE_WRITE   3
+#define FD_CONSOLE      4   /* stdin/stdout/stderr */
+
+struct process_fd {
+    int type;           /* FD_NONE, FD_VFS, FD_PIPE_READ, FD_PIPE_WRITE, FD_CONSOLE */
+    void *data;         /* vfs_node* for VFS, pipe* for pipes */
+    uint64_t offset;    /* file offset for VFS files */
+};
 
 /* Process states */
 enum process_state {
@@ -43,6 +57,21 @@ struct process {
     uint32_t ppid;               /* Parent PID (0 = kernel/init) */
     int32_t exit_code;           /* From sys_exit() */
     uint32_t wait_for_pid;       /* If BLOCKED on wait: child PID (0 = any) */
+
+    /* Per-process file descriptor table */
+    struct process_fd fd_table[PROCESS_MAX_FDS];
+
+    /* Signal support */
+    uint32_t sig_pending;        /* bitmask of pending signals */
+    uint64_t sig_handlers[32];   /* per-signal handler addresses (0=SIG_DFL, 1=SIG_IGN) */
+    uint64_t sig_saved_rip;      /* saved RIP before signal delivery */
+    uint64_t sig_saved_rsp;      /* saved RSP before signal delivery */
+    uint64_t sig_saved_rflags;   /* saved RFLAGS before signal delivery */
+    uint64_t sig_saved_rax;      /* saved RAX */
+    uint64_t sig_saved_rdi;      /* saved RDI */
+    uint64_t sig_saved_rsi;      /* saved RSI */
+    uint64_t sig_saved_rdx;      /* saved RDX */
+    bool in_signal_handler;      /* true while delivering a signal */
 };
 
 void process_init(void);

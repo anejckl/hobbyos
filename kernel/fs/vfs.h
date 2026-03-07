@@ -18,6 +18,8 @@ struct vfs_node;
 struct vfs_ops {
     int (*read)(struct vfs_node *node, uint64_t offset, uint64_t size,
                 uint8_t *buffer);
+    int (*write)(struct vfs_node *node, uint64_t offset, uint64_t size,
+                 const uint8_t *buffer);
     int (*readdir)(struct vfs_node *node, uint32_t index, char *name_out,
                    uint32_t name_size);
 };
@@ -42,6 +44,13 @@ struct vfs_fd {
 /* Initialize the VFS subsystem */
 void vfs_init(void);
 
+/* Mount a filesystem at a prefix (e.g., "/proc").
+ * Returns 0 on success, -1 on failure. */
+int vfs_mount(const char *prefix, struct vfs_ops *ops);
+
+/* Get mount ops for a path, or NULL if no mount matches. */
+struct vfs_ops *vfs_get_mount_ops(const char *path);
+
 /* Register a node in the root directory.
  * Returns pointer to the node, or NULL on failure. */
 struct vfs_node *vfs_register_node(const char *name, uint32_t type);
@@ -52,6 +61,10 @@ int vfs_open(const char *path);
 /* Read from an open file descriptor.
  * Returns bytes read, or -1 on error. */
 int vfs_read(int fd, uint8_t *buffer, uint64_t size);
+
+/* Write to an open file descriptor.
+ * Returns bytes written, or -1 on error. */
+int vfs_write(int fd, const uint8_t *buffer, uint64_t size);
 
 /* Close a file descriptor. Returns 0 on success, -1 on error. */
 int vfs_close(int fd);

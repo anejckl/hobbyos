@@ -12,18 +12,46 @@ typedef uint64_t           size_t;
 #define NULL ((void *)0)
 
 /* Syscall numbers */
-#define SYS_WRITE   0
-#define SYS_EXIT    1
-#define SYS_GETPID  2
-#define SYS_EXEC    3
-#define SYS_WAIT    4
-#define SYS_FORK    5
+#define SYS_WRITE       0
+#define SYS_EXIT        1
+#define SYS_GETPID      2
+#define SYS_EXEC        3
+#define SYS_WAIT        4
+#define SYS_FORK        5
+#define SYS_READ        6
+#define SYS_OPEN        7
+#define SYS_CLOSE       8
+#define SYS_PIPE        9
+#define SYS_DUP2        10
+#define SYS_KILL        11
+#define SYS_SIGACTION   12
+#define SYS_SIGRETURN   13
+#define SYS_GETPPID     14
+
+/* Signal constants */
+#define SIGINT   2
+#define SIGKILL  9
+#define SIGPIPE  13
+#define SIGTERM  15
+#define SIGCHLD  17
+
+#define SIG_DFL  ((uint64_t)0)
+#define SIG_IGN  ((uint64_t)1)
 
 static inline uint64_t syscall3(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3) {
     uint64_t ret;
     __asm__ volatile("int $0x80"
         : "=a"(ret)
         : "a"(num), "D"(a1), "S"(a2), "d"(a3)
+        : "rcx", "r11", "memory");
+    return ret;
+}
+
+static inline uint64_t syscall2(uint64_t num, uint64_t a1, uint64_t a2) {
+    uint64_t ret;
+    __asm__ volatile("int $0x80"
+        : "=a"(ret)
+        : "a"(num), "D"(a1), "S"(a2)
         : "rcx", "r11", "memory");
     return ret;
 }
@@ -69,6 +97,42 @@ static inline int64_t sys_wait(int32_t *status) {
 
 static inline int64_t sys_fork(void) {
     return (int64_t)syscall0(SYS_FORK);
+}
+
+static inline int64_t sys_read(int fd, void *buf, uint64_t count) {
+    return (int64_t)syscall3(SYS_READ, (uint64_t)fd, (uint64_t)buf, count);
+}
+
+static inline int64_t sys_open(const char *path, uint64_t flags) {
+    return (int64_t)syscall2(SYS_OPEN, (uint64_t)path, flags);
+}
+
+static inline int64_t sys_close(int fd) {
+    return (int64_t)syscall1(SYS_CLOSE, (uint64_t)fd);
+}
+
+static inline int64_t sys_pipe(int *fds) {
+    return (int64_t)syscall1(SYS_PIPE, (uint64_t)fds);
+}
+
+static inline int64_t sys_dup2(int oldfd, int newfd) {
+    return (int64_t)syscall2(SYS_DUP2, (uint64_t)oldfd, (uint64_t)newfd);
+}
+
+static inline int64_t sys_kill(uint32_t pid, int sig) {
+    return (int64_t)syscall2(SYS_KILL, (uint64_t)pid, (uint64_t)sig);
+}
+
+static inline int64_t sys_sigaction(int sig, uint64_t handler) {
+    return (int64_t)syscall2(SYS_SIGACTION, (uint64_t)sig, handler);
+}
+
+static inline void sys_sigreturn(void) {
+    syscall0(SYS_SIGRETURN);
+}
+
+static inline uint64_t sys_getppid(void) {
+    return syscall0(SYS_GETPPID);
 }
 
 #endif /* USER_SYSCALL_H */

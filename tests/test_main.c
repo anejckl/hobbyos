@@ -32,6 +32,12 @@ int main(void) {
     test_vfs_suite();
     printf("\n");
 
+    test_pipe_suite();
+    printf("\n");
+
+    test_signal_suite();
+    printf("\n");
+
     printf("=======================\n");
     printf("Results: %d passed, %d failed, %d total\n",
            tests_passed, tests_failed, tests_passed + tests_failed);

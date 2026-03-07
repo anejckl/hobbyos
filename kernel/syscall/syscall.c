@@ -7,9 +7,32 @@
 #include "../process/user_process.h"
 #include "../memory/user_vm.h"
 #include "../memory/kheap.h"
+#include "../fs/vfs.h"
 #include "../fs/ramfs.h"
+#include "../fs/pipe.h"
+#include "../fs/ext2.h"
+#include "../signal/signal.h"
 #include "../string.h"
 #include "../debug/debug.h"
+
+/* Initialize FD table for a process with console on 0/1/2 */
+void process_fd_init(struct process *proc) {
+    memset(proc->fd_table, 0, sizeof(proc->fd_table));
+    for (int i = 0; i < 3; i++) {
+        proc->fd_table[i].type = FD_CONSOLE;
+        proc->fd_table[i].data = NULL;
+        proc->fd_table[i].offset = 0;
+    }
+}
+
+/* Find a free FD slot in a process (starting at 'start') */
+static int process_fd_alloc(struct process *proc, int start) {
+    for (int i = start; i < PROCESS_MAX_FDS; i++) {
+        if (proc->fd_table[i].type == FD_NONE)
+            return i;
+    }
+    return -1;
+}
 
 /* Syscall handler for INT 0x80 */
 static void syscall_handler(struct interrupt_frame *frame) {
@@ -25,27 +48,46 @@ static void syscall_handler(struct interrupt_frame *frame) {
         const char *buf = (const char *)arg2;
         uint64_t len = arg3;
 
-        /* Only support stdout (fd=1) */
-        if (fd != 1) {
-            frame->rax = (uint64_t)-1;
-            return;
-        }
-
         /* Validate buffer is in user space (below KERNEL_VMA) */
         if ((uint64_t)buf >= KERNEL_VMA || (uint64_t)buf + len >= KERNEL_VMA) {
             frame->rax = (uint64_t)-1;
             return;
         }
 
-        /* Write characters to VGA */
-        for (uint64_t i = 0; i < len; i++)
-            vga_putchar(buf[i]);
+        struct process *cur = scheduler_get_current();
 
-        /* Mirror to serial for automated testing */
-        for (uint64_t i = 0; i < len; i++)
-            debug_putchar(buf[i]);
+        if (fd >= PROCESS_MAX_FDS || cur->fd_table[fd].type == FD_NONE) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
 
-        frame->rax = len;
+        int fdtype = cur->fd_table[fd].type;
+
+        if (fdtype == FD_CONSOLE) {
+            /* stdout/stderr: write to VGA + serial */
+            for (uint64_t i = 0; i < len; i++)
+                vga_putchar(buf[i]);
+            for (uint64_t i = 0; i < len; i++)
+                debug_putchar(buf[i]);
+            frame->rax = len;
+        } else if (fdtype == FD_PIPE_WRITE) {
+            int ret = pipe_write((struct pipe *)cur->fd_table[fd].data,
+                                 (const uint8_t *)buf, (uint32_t)len);
+            frame->rax = (uint64_t)ret;
+        } else if (fdtype == FD_VFS) {
+            struct vfs_node *node = (struct vfs_node *)cur->fd_table[fd].data;
+            if (node && node->ops && node->ops->write) {
+                int ret = node->ops->write(node, cur->fd_table[fd].offset,
+                                           len, (const uint8_t *)buf);
+                if (ret > 0)
+                    cur->fd_table[fd].offset += (uint64_t)ret;
+                frame->rax = (uint64_t)ret;
+            } else {
+                frame->rax = (uint64_t)-1;
+            }
+        } else {
+            frame->rax = (uint64_t)-1;
+        }
         return;
     }
 
@@ -55,8 +97,23 @@ static void syscall_handler(struct interrupt_frame *frame) {
         struct process *table = process_table_get();
         debug_printf("syscall: process %u (%s) exit with status %d\n",
                      (uint64_t)cur->pid, cur->name, arg1);
+
+        /* Close all open FDs */
+        for (int i = 0; i < PROCESS_MAX_FDS; i++) {
+            if (cur->fd_table[i].type == FD_PIPE_READ) {
+                pipe_close_read((struct pipe *)cur->fd_table[i].data);
+                cur->fd_table[i].type = FD_NONE;
+            } else if (cur->fd_table[i].type == FD_PIPE_WRITE) {
+                pipe_close_write((struct pipe *)cur->fd_table[i].data);
+                cur->fd_table[i].type = FD_NONE;
+            }
+        }
+
         cur->state = PROCESS_ZOMBIE;
         cur->exit_code = (int32_t)arg1;
+
+        /* Send SIGCHLD to parent */
+        signal_send(cur->ppid, 17); /* SIGCHLD */
 
         /* Reparent children to PID 1 */
         for (int i = 0; i < MAX_PROCESSES; i++) {
@@ -97,9 +154,43 @@ static void syscall_handler(struct interrupt_frame *frame) {
             return;
         }
 
-        /* Look up program in RAMFS */
+        /* Try ext2 filesystem first */
         uint64_t prog_size = 0;
-        const uint8_t *prog_data = ramfs_get_file_data(path, &prog_size);
+        const uint8_t *prog_data = NULL;
+        uint8_t *ext2_buf = NULL;
+
+        if (ext2_is_mounted()) {
+            /* Try /bin/<name> on ext2 */
+            char ext2_path[64];
+            ext2_path[0] = '/';
+            ext2_path[1] = 'b';
+            ext2_path[2] = 'i';
+            ext2_path[3] = 'n';
+            ext2_path[4] = '/';
+            strncpy(ext2_path + 5, path, sizeof(ext2_path) - 6);
+            ext2_path[sizeof(ext2_path) - 1] = '\0';
+
+            uint32_t ino = ext2_path_lookup(ext2_path);
+            if (ino) {
+                struct ext2_inode inode;
+                if (ext2_read_inode(ino, &inode) == 0 && inode.i_size > 0) {
+                    ext2_buf = (uint8_t *)kmalloc(inode.i_size);
+                    if (ext2_buf) {
+                        int bytes = ext2_read_file(&inode, 0,
+                                                   inode.i_size, ext2_buf);
+                        if (bytes > 0) {
+                            prog_data = ext2_buf;
+                            prog_size = (uint64_t)bytes;
+                        }
+                    }
+                }
+            }
+        }
+
+        /* Fall back to RAMFS */
+        if (!prog_data)
+            prog_data = ramfs_get_file_data(path, &prog_size);
+
         if (!prog_data) {
             debug_printf("syscall: exec '%s' not found\n", path);
             frame->rax = (uint64_t)-1;
@@ -135,7 +226,7 @@ static void syscall_handler(struct interrupt_frame *frame) {
         }
         uint64_t child_kstack_top = (uint64_t)child_kstack + PROCESS_STACK_SIZE;
 
-        /* 3. Clone parent address space (eager copy) */
+        /* 3. Clone parent address space (COW) */
         uint64_t child_cr3 = user_vm_fork_address_space(parent->cr3);
         if (!child_cr3) {
             frame->rax = (uint64_t)-1;
@@ -165,18 +256,41 @@ static void syscall_handler(struct interrupt_frame *frame) {
         child->exit_code = 0;
         child->wait_for_pid = 0;
 
-        /* 7. Set context so scheduler jumps to fork_return_trampoline */
+        /* 7. Copy parent's FD table to child */
+        memcpy(child->fd_table, parent->fd_table, sizeof(parent->fd_table));
+
+        /* Increment refcounts for shared pipes */
+        for (int i = 0; i < PROCESS_MAX_FDS; i++) {
+            if (child->fd_table[i].type == FD_PIPE_READ ||
+                child->fd_table[i].type == FD_PIPE_WRITE) {
+                /* Pipe refcounts handled by pipe_create's initial setup:
+                 * readers/writers count tracks open ends. Increment on fork. */
+                struct pipe *p = (struct pipe *)child->fd_table[i].data;
+                if (p) {
+                    /* Access pipe fields directly (defined in pipe.h) */
+                    pipe_inc_ref(p, child->fd_table[i].type);
+                }
+            }
+        }
+
+        /* 8. Copy signal handlers */
+        memcpy(child->sig_handlers, parent->sig_handlers,
+               sizeof(parent->sig_handlers));
+        child->sig_pending = 0;
+        child->in_signal_handler = false;
+
+        /* 9. Set context so scheduler jumps to fork_return_trampoline */
         memset(&child->context, 0, sizeof(struct context));
         child->context.rip = (uint64_t)fork_return_trampoline;
         child->context.rsp = (uint64_t)child_frame;
 
-        /* 8. Add child to scheduler */
+        /* 10. Add child to scheduler */
         scheduler_add(child);
 
         debug_printf("syscall: fork: parent PID=%u -> child PID=%u\n",
                      (uint64_t)parent->pid, (uint64_t)child->pid);
 
-        /* 9. Parent returns child PID */
+        /* 11. Parent returns child PID */
         frame->rax = (uint64_t)child->pid;
         return;
     }
@@ -229,6 +343,269 @@ static void syscall_handler(struct interrupt_frame *frame) {
         }
 
         frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    case SYS_READ: {
+        /* sys_read(fd, buf, count) */
+        uint64_t fd = arg1;
+        uint8_t *buf = (uint8_t *)arg2;
+        uint64_t count = arg3;
+
+        if ((uint64_t)buf >= KERNEL_VMA || (uint64_t)buf + count >= KERNEL_VMA) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        struct process *cur = scheduler_get_current();
+
+        if (fd >= PROCESS_MAX_FDS || cur->fd_table[fd].type == FD_NONE) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        int fdtype = cur->fd_table[fd].type;
+
+        if (fdtype == FD_PIPE_READ) {
+            int ret = pipe_read((struct pipe *)cur->fd_table[fd].data,
+                                buf, (uint32_t)count);
+            frame->rax = (uint64_t)ret;
+        } else if (fdtype == FD_VFS) {
+            struct vfs_node *node = (struct vfs_node *)cur->fd_table[fd].data;
+            if (node && node->ops && node->ops->read) {
+                int ret = node->ops->read(node, cur->fd_table[fd].offset,
+                                          count, buf);
+                if (ret > 0)
+                    cur->fd_table[fd].offset += (uint64_t)ret;
+                frame->rax = (uint64_t)ret;
+            } else {
+                frame->rax = (uint64_t)-1;
+            }
+        } else if (fdtype == FD_CONSOLE) {
+            /* stdin: not implemented yet, return 0 */
+            frame->rax = 0;
+        } else {
+            frame->rax = (uint64_t)-1;
+        }
+        return;
+    }
+
+    case SYS_OPEN: {
+        /* sys_open(path, flags) */
+        const char *path = (const char *)arg1;
+
+        if ((uint64_t)path >= KERNEL_VMA) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        struct process *cur = scheduler_get_current();
+
+        /* Check mount points first (e.g., /proc) */
+        struct vfs_ops *mount_ops = vfs_get_mount_ops(path);
+        struct vfs_node *node;
+
+        if (mount_ops) {
+            /* For mounted filesystems, create a temporary node */
+            node = vfs_register_node(path, VFS_FILE);
+            if (!node) {
+                frame->rax = (uint64_t)-1;
+                return;
+            }
+            node->ops = mount_ops;
+        } else {
+            node = vfs_lookup(path);
+            if (!node) {
+                frame->rax = (uint64_t)-1;
+                return;
+            }
+        }
+
+        /* Allocate FD in process table */
+        int fd = process_fd_alloc(cur, 3);
+        if (fd < 0) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        cur->fd_table[fd].type = FD_VFS;
+        cur->fd_table[fd].data = node;
+        cur->fd_table[fd].offset = 0;
+
+        frame->rax = (uint64_t)fd;
+        return;
+    }
+
+    case SYS_CLOSE: {
+        /* sys_close(fd) */
+        uint64_t fd = arg1;
+        struct process *cur = scheduler_get_current();
+
+        if (fd >= PROCESS_MAX_FDS || fd < 3) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        int fdtype = cur->fd_table[fd].type;
+        if (fdtype == FD_NONE) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        if (fdtype == FD_PIPE_READ)
+            pipe_close_read((struct pipe *)cur->fd_table[fd].data);
+        else if (fdtype == FD_PIPE_WRITE)
+            pipe_close_write((struct pipe *)cur->fd_table[fd].data);
+
+        cur->fd_table[fd].type = FD_NONE;
+        cur->fd_table[fd].data = NULL;
+        cur->fd_table[fd].offset = 0;
+
+        frame->rax = 0;
+        return;
+    }
+
+    case SYS_PIPE: {
+        /* sys_pipe(int fds[2]) */
+        int *user_fds = (int *)arg1;
+
+        if ((uint64_t)user_fds >= KERNEL_VMA ||
+            (uint64_t)(user_fds + 2) >= KERNEL_VMA) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        struct process *cur = scheduler_get_current();
+        struct pipe *p = NULL;
+
+        if (pipe_create(&p) < 0 || !p) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        int rfd = process_fd_alloc(cur, 3);
+        if (rfd < 0) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        cur->fd_table[rfd].type = FD_PIPE_READ;
+        cur->fd_table[rfd].data = p;
+
+        int wfd = process_fd_alloc(cur, rfd + 1);
+        if (wfd < 0) {
+            cur->fd_table[rfd].type = FD_NONE;
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        cur->fd_table[wfd].type = FD_PIPE_WRITE;
+        cur->fd_table[wfd].data = p;
+
+        user_fds[0] = rfd;
+        user_fds[1] = wfd;
+        frame->rax = 0;
+        return;
+    }
+
+    case SYS_DUP2: {
+        /* sys_dup2(oldfd, newfd) */
+        uint64_t oldfd = arg1;
+        uint64_t newfd = arg2;
+        struct process *cur = scheduler_get_current();
+
+        if (oldfd >= PROCESS_MAX_FDS || newfd >= PROCESS_MAX_FDS) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        if (cur->fd_table[oldfd].type == FD_NONE) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        if (oldfd == newfd) {
+            frame->rax = (uint64_t)newfd;
+            return;
+        }
+
+        /* Close newfd if open */
+        if (cur->fd_table[newfd].type == FD_PIPE_READ)
+            pipe_close_read((struct pipe *)cur->fd_table[newfd].data);
+        else if (cur->fd_table[newfd].type == FD_PIPE_WRITE)
+            pipe_close_write((struct pipe *)cur->fd_table[newfd].data);
+
+        /* Copy oldfd to newfd */
+        cur->fd_table[newfd] = cur->fd_table[oldfd];
+
+        /* Increment pipe refcount if pipe */
+        if (cur->fd_table[newfd].type == FD_PIPE_READ ||
+            cur->fd_table[newfd].type == FD_PIPE_WRITE) {
+            pipe_inc_ref((struct pipe *)cur->fd_table[newfd].data,
+                         cur->fd_table[newfd].type);
+        }
+
+        frame->rax = (uint64_t)newfd;
+        return;
+    }
+
+    case SYS_KILL: {
+        /* sys_kill(pid, sig) */
+        uint32_t pid = (uint32_t)arg1;
+        int sig = (int)arg2;
+
+        if (sig < 1 || sig >= 32) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        struct process *target = process_get_by_pid(pid);
+        if (!target || target->state == PROCESS_UNUSED ||
+            target->state == PROCESS_TERMINATED) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        signal_send(pid, sig);
+        frame->rax = 0;
+        return;
+    }
+
+    case SYS_SIGACTION: {
+        /* sys_sigaction(sig, handler) */
+        int sig = (int)arg1;
+        uint64_t handler = arg2;
+        struct process *cur = scheduler_get_current();
+
+        if (sig < 1 || sig >= 32 || sig == 9) { /* Can't catch SIGKILL */
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        cur->sig_handlers[sig] = handler;
+        frame->rax = 0;
+        return;
+    }
+
+    case SYS_SIGRETURN: {
+        /* Restore pre-signal user context */
+        struct process *cur = scheduler_get_current();
+
+        if (!cur->in_signal_handler) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        frame->rip = cur->sig_saved_rip;
+        frame->rsp = cur->sig_saved_rsp;
+        frame->rflags = cur->sig_saved_rflags;
+        frame->rax = cur->sig_saved_rax;
+        frame->rdi = cur->sig_saved_rdi;
+        frame->rsi = cur->sig_saved_rsi;
+        frame->rdx = cur->sig_saved_rdx;
+        cur->in_signal_handler = false;
+        return;
+    }
+
+    case SYS_GETPPID: {
+        struct process *cur = scheduler_get_current();
+        frame->rax = (uint64_t)cur->ppid;
         return;
     }
 

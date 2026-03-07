@@ -43,6 +43,16 @@ struct process *process_create(const char *name, void (*entry)(void)) {
     proc->exit_code = 0;
     proc->wait_for_pid = 0;
 
+    /* Initialize FD table with console on 0/1/2 */
+    memset(proc->fd_table, 0, sizeof(proc->fd_table));
+    for (int i = 0; i < 3; i++)
+        proc->fd_table[i].type = FD_CONSOLE;
+
+    /* Initialize signal state */
+    proc->sig_pending = 0;
+    memset(proc->sig_handlers, 0, sizeof(proc->sig_handlers));
+    proc->in_signal_handler = false;
+
     /* Set up initial context so context_switch will "return" to entry */
     memset(&proc->context, 0, sizeof(struct context));
     proc->context.rip = (uint64_t)entry;

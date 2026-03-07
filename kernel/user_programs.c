@@ -13,6 +13,12 @@ extern const uint8_t _binary_cow_test_elf_start[];
 extern const uint8_t _binary_cow_test_elf_end[];
 extern const uint8_t _binary_multifork_test_elf_start[];
 extern const uint8_t _binary_multifork_test_elf_end[];
+extern const uint8_t _binary_pipe_test_elf_start[];
+extern const uint8_t _binary_pipe_test_elf_end[];
+extern const uint8_t _binary_signal_test_elf_start[];
+extern const uint8_t _binary_signal_test_elf_end[];
+extern const uint8_t _binary_procfs_test_elf_start[];
+extern const uint8_t _binary_procfs_test_elf_end[];
 
 static const struct user_program programs[] = {
     {
@@ -40,6 +46,21 @@ static const struct user_program programs[] = {
         .data = _binary_multifork_test_elf_start,
         .size = 0
     },
+    {
+        .name = "pipe_test",
+        .data = _binary_pipe_test_elf_start,
+        .size = 0
+    },
+    {
+        .name = "signal_test",
+        .data = _binary_signal_test_elf_start,
+        .size = 0
+    },
+    {
+        .name = "procfs_test",
+        .data = _binary_procfs_test_elf_start,
+        .size = 0
+    },
     { NULL, NULL, 0 }
 };
 
@@ -54,6 +75,12 @@ static uint64_t program_size(const uint8_t *data) {
         return (uint64_t)(_binary_cow_test_elf_end - _binary_cow_test_elf_start);
     if (data == _binary_multifork_test_elf_start)
         return (uint64_t)(_binary_multifork_test_elf_end - _binary_multifork_test_elf_start);
+    if (data == _binary_pipe_test_elf_start)
+        return (uint64_t)(_binary_pipe_test_elf_end - _binary_pipe_test_elf_start);
+    if (data == _binary_signal_test_elf_start)
+        return (uint64_t)(_binary_signal_test_elf_end - _binary_signal_test_elf_start);
+    if (data == _binary_procfs_test_elf_start)
+        return (uint64_t)(_binary_procfs_test_elf_end - _binary_procfs_test_elf_start);
     return 0;
 }
 

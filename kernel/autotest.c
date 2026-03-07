@@ -10,6 +10,9 @@ static const char *test_programs[] = {
     "fork_test",
     "cow_test",
     "multifork_test",
+    "pipe_test",
+    "signal_test",
+    "procfs_test",
     NULL
 };
 

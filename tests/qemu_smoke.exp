@@ -14,6 +14,7 @@ Process subsystem initialized
 Scheduler initialized
 VFS initialized
 RAMFS mounted
+procfs: mounted at /proc
 Interrupts enabled
 # Autotest integration tests
 AUTOTEST: running fork_test
@@ -26,4 +27,16 @@ AUTOTEST: cow_test exited with status 0
 AUTOTEST: running multifork_test
 multifork: all children reaped, done.
 AUTOTEST: multifork_test exited with status 0
+# Pipe test
+AUTOTEST: running pipe_test
+pipe_test: PASS - pipe communication works!
+AUTOTEST: pipe_test exited with status 0
+# Signal test
+AUTOTEST: running signal_test
+signal_test: starting
+AUTOTEST: signal_test exited with status 0
+# Procfs test
+AUTOTEST: running procfs_test
+procfs_test: PASS - read /proc/self/status successfully
+AUTOTEST: procfs_test exited with status 0
 AUTOTEST: all tests passed

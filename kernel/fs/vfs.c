@@ -6,9 +6,20 @@ static struct vfs_node nodes[VFS_MAX_NODES];
 static struct vfs_fd fd_table[VFS_MAX_FDS];
 static struct vfs_node root_node;
 
+/* Mount point table */
+#define VFS_MAX_MOUNTS 4
+struct vfs_mount {
+    char prefix[32];        /* e.g., "/proc" */
+    struct vfs_ops *ops;
+    void *(*open_func)(const char *path);  /* returns node-like handle */
+    bool in_use;
+};
+static struct vfs_mount mounts[VFS_MAX_MOUNTS];
+
 void vfs_init(void) {
     memset(nodes, 0, sizeof(nodes));
     memset(fd_table, 0, sizeof(fd_table));
+    memset(mounts, 0, sizeof(mounts));
 
     /* Reserve fd 0-2 for stdin/stdout/stderr */
     for (int i = 0; i < 3; i++)
@@ -22,6 +33,20 @@ void vfs_init(void) {
     debug_printf("VFS initialized\n");
 }
 
+int vfs_mount(const char *prefix, struct vfs_ops *ops) {
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
+        if (!mounts[i].in_use) {
+            strncpy(mounts[i].prefix, prefix, sizeof(mounts[i].prefix) - 1);
+            mounts[i].prefix[sizeof(mounts[i].prefix) - 1] = '\0';
+            mounts[i].ops = ops;
+            mounts[i].in_use = true;
+            debug_printf("VFS: mounted at %s\n", prefix);
+            return 0;
+        }
+    }
+    return -1;
+}
+
 struct vfs_node *vfs_register_node(const char *name, uint32_t type) {
     for (int i = 0; i < VFS_MAX_NODES; i++) {
         if (!nodes[i].in_use) {
@@ -33,6 +58,29 @@ struct vfs_node *vfs_register_node(const char *name, uint32_t type) {
             return &nodes[i];
         }
     }
+    return NULL;
+}
+
+/* Check if path matches a mount point.
+ * Returns mount index, or -1 if none match. */
+static int vfs_find_mount(const char *path) {
+    if (!path)
+        return -1;
+    for (int i = 0; i < VFS_MAX_MOUNTS; i++) {
+        if (!mounts[i].in_use)
+            continue;
+        size_t plen = strlen(mounts[i].prefix);
+        if (strncmp(path, mounts[i].prefix, plen) == 0 &&
+            (path[plen] == '/' || path[plen] == '\0'))
+            return i;
+    }
+    return -1;
+}
+
+struct vfs_ops *vfs_get_mount_ops(const char *path) {
+    int idx = vfs_find_mount(path);
+    if (idx >= 0)
+        return mounts[idx].ops;
     return NULL;
 }
 
@@ -87,6 +135,20 @@ int vfs_read(int fd, uint8_t *buffer, uint64_t size) {
         return -1;
 
     int bytes = node->ops->read(node, fd_table[fd].offset, size, buffer);
+    if (bytes > 0)
+        fd_table[fd].offset += (uint64_t)bytes;
+    return bytes;
+}
+
+int vfs_write(int fd, const uint8_t *buffer, uint64_t size) {
+    if (fd < 0 || fd >= VFS_MAX_FDS || !fd_table[fd].in_use)
+        return -1;
+
+    struct vfs_node *node = fd_table[fd].node;
+    if (!node || !node->ops || !node->ops->write)
+        return -1;
+
+    int bytes = node->ops->write(node, fd_table[fd].offset, size, buffer);
     if (bytes > 0)
         fd_table[fd].offset += (uint64_t)bytes;
     return bytes;

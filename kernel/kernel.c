@@ -17,6 +17,9 @@
 #include "debug/debug.h"
 #include "fs/vfs.h"
 #include "fs/ramfs.h"
+#include "fs/procfs.h"
+#include "fs/ext2.h"
+#include "drivers/ata.h"
 #include "user_programs.h"
 #include "autotest.h"
 
@@ -116,6 +119,21 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
 
     user_programs_populate_ramfs();
     vga_printf("[OK] User programs loaded into RAMFS\n");
+
+    procfs_init();
+    vga_printf("[OK] Procfs mounted at /proc\n");
+
+    /* ATA disk driver */
+    ata_init();
+    if (ata_disk_present()) {
+        vga_printf("[OK] ATA disk detected\n");
+        if (ext2_init() == 0)
+            vga_printf("[OK] ext2 filesystem mounted\n");
+        else
+            vga_printf("[--] ext2: no valid filesystem found\n");
+    } else {
+        vga_printf("[--] No ATA disk detected\n");
+    }
 
     /* Enable interrupts */
     sti();

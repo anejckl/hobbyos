@@ -44,11 +44,16 @@ C_SRCS = kernel/kernel.c \
          kernel/syscall/syscall.c \
          kernel/user_programs.c \
          kernel/elf/elf_loader.c \
+         kernel/signal/signal.c \
          kernel/fs/vfs.c \
          kernel/fs/ramfs.c \
+         kernel/fs/pipe.c \
+         kernel/fs/procfs.c \
+         kernel/fs/ext2.c \
          kernel/drivers/vga.c \
          kernel/drivers/keyboard.c \
          kernel/drivers/pit.c \
+         kernel/drivers/ata.c \
          kernel/shell/shell.c \
          kernel/debug/debug.c \
          kernel/autotest.c
@@ -58,7 +63,7 @@ ASM_OBJS = $(ASM_SRCS:.asm=.o)
 C_OBJS = $(C_SRCS:.c=.o)
 
 # User program embedded objects
-USER_PROGRAMS = hello counter fork_test cow_test multifork_test
+USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test
 USER_EMBED_OBJS = $(patsubst %,user/%_embed.o,$(USER_PROGRAMS))
 
 OBJS = $(ASM_OBJS) $(C_OBJS) $(USER_EMBED_OBJS)
@@ -99,19 +104,36 @@ iso: $(KERNEL_BIN)
 	cp grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) $(ISO_DIR)
 
+# ext2 disk image with user programs
+disk.img: $(patsubst %,user/%.elf,$(USER_PROGRAMS))
+	dd if=/dev/zero of=disk.img bs=1M count=16
+	mkfs.ext2 -F disk.img
+	mkdir -p /tmp/hobbyos_mnt
+	mount -o loop disk.img /tmp/hobbyos_mnt || true
+	mkdir -p /tmp/hobbyos_mnt/bin || true
+	for prog in $(USER_PROGRAMS); do \
+		cp user/$$prog.elf /tmp/hobbyos_mnt/bin/$$prog 2>/dev/null || true; \
+	done
+	umount /tmp/hobbyos_mnt 2>/dev/null || true
+	rm -rf /tmp/hobbyos_mnt
+
+# QEMU flags for disk support
+QEMU_DISK_FLAGS = $(if $(wildcard disk.img),-drive file=disk.img$(comma)format=raw$(comma)if=ide,)
+comma := ,
+
 run: iso
 	qemu-system-x86_64 -cdrom $(ISO) -serial stdio -m 128M \
-		-no-reboot -no-shutdown
+		-no-reboot -no-shutdown $(QEMU_DISK_FLAGS)
 
 debug: iso
 	@echo "Starting QEMU in debug mode..."
 	@echo "Connect GDB with: target remote localhost:1234"
 	qemu-system-x86_64 -cdrom $(ISO) -serial stdio -m 128M \
-		-no-reboot -no-shutdown -s -S -d int,cpu_reset
+		-no-reboot -no-shutdown -s -S -d int,cpu_reset $(QEMU_DISK_FLAGS)
 
 # Host-side unit tests (fast, no QEMU needed)
 test-host:
-	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_refcount.c tests/test_printf.c tests/test_elf.c tests/test_vfs.c -Itests -Wall -Wextra
+	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_refcount.c tests/test_printf.c tests/test_elf.c tests/test_vfs.c tests/test_pipe.c tests/test_signal.c -Itests -Wall -Wextra
 	./tests/run_tests
 
 # QEMU smoke test (boots kernel, checks serial output)
@@ -130,5 +152,5 @@ install-hooks:
 clean:
 	rm -f $(OBJS) $(KERNEL_BIN) $(ISO) tests/run_tests tests/serial_output.log
 	rm -f user/*.o user/*.elf user/*.bin
-	rm -f kernel/elf/*.o kernel/fs/*.o
+	rm -f kernel/elf/*.o kernel/fs/*.o kernel/signal/*.o kernel/drivers/*.o
 	rm -rf $(ISO_DIR)

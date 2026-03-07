@@ -174,7 +174,7 @@ hobbyos/
 │   │   └── user_process.c / .h # User-mode process creation (address space + trampoline)
 │   │
 │   ├── syscall/
-│   │   └── syscall.c / .h      # INT 0x80 handler: sys_write(0), sys_exit(1), sys_getpid(2)
+│   │   └── syscall.c / .h      # INT 0x80 handler: 15 syscalls (write/exit/getpid/exec/wait/fork/read/open/close/pipe/dup2/kill/sigaction/sigreturn/getppid)
 │   │
 │   ├── scheduler/
 │   │   ├── scheduler.c / .h    # Round-robin, 100 ms quantum (10 ticks at 100 Hz)
@@ -184,10 +184,21 @@ hobbyos/
 │   │   ├── driver.h             # Generic driver interface
 │   │   ├── vga.c / vga.h       # 80×25 text mode, printf (%s %d %u %x %p %c %%)
 │   │   ├── keyboard.c / .h     # PS/2, IRQ 1, scan code Set 1, circular buffer
-│   │   └── pit.c / pit.h       # PIT channel 0, calls scheduler_tick()
+│   │   ├── pit.c / pit.h       # PIT channel 0, calls scheduler_tick()
+│   │   └── ata.c / ata.h       # ATA PIO disk driver (LBA28, read/write sectors)
+│   │
+│   ├── fs/
+│   │   ├── vfs.c / vfs.h       # VFS: node table, open/read/write/close, mount points
+│   │   ├── ramfs.c / ramfs.h   # RAM filesystem: files backed by embedded .rodata
+│   │   ├── pipe.c / pipe.h     # Pipe ring buffer (4KB) with blocking read/write
+│   │   ├── procfs.c / procfs.h # /proc virtual filesystem (/proc/<pid>/status, /proc/<pid>/fd)
+│   │   └── ext2.c / ext2.h     # ext2 filesystem reader (via ATA PIO)
+│   │
+│   ├── signal/
+│   │   └── signal.c / signal.h  # Signal delivery (SIGINT, SIGKILL, SIGTERM, SIGCHLD, SIGPIPE)
 │   │
 │   ├── shell/
-│   │   └── shell.c / shell.h   # 7 commands: help, ps, mem, uptime, echo, clear, run
+│   │   └── shell.c / shell.h   # 14 commands: help, ps, mem, uptime, echo, clear, run, ls, jobs, proc, fg, bg, kill, cat
 │   │
 │   ├── user_programs.c / .h    # Embedded user program registry (find by name)
 │   │
@@ -198,6 +209,12 @@ hobbyos/
 │   ├── syscall.h               # User-space syscall wrappers (inline INT 0x80)
 │   ├── hello.c                 # "Hello from user mode!" + PID
 │   ├── counter.c               # Counts 1-5 with delays
+│   ├── fork_test.c             # Fork + wait test
+│   ├── cow_test.c              # COW fork isolation test
+│   ├── multifork_test.c        # Multiple fork + wait test
+│   ├── pipe_test.c             # Pipe communication test
+│   ├── signal_test.c           # Signal delivery test
+│   ├── procfs_test.c           # /proc/self/status read test
 │   └── user.ld                 # User program linker script (entry at 0x400000)
 │
 ├── scripts/
@@ -259,6 +276,18 @@ hobbyos/
 | 0 | `sys_write` | RDI=fd, RSI=buf, RDX=len | bytes written |
 | 1 | `sys_exit` | RDI=status | never returns |
 | 2 | `sys_getpid` | — | PID |
+| 3 | `sys_exec` | RDI=path | 0 or -1 |
+| 4 | `sys_wait` | RDI=status_ptr | child PID or -1 |
+| 5 | `sys_fork` | — | child PID (parent) / 0 (child) |
+| 6 | `sys_read` | RDI=fd, RSI=buf, RDX=count | bytes read |
+| 7 | `sys_open` | RDI=path, RSI=flags | fd or -1 |
+| 8 | `sys_close` | RDI=fd | 0 or -1 |
+| 9 | `sys_pipe` | RDI=fds[2] | 0 or -1 |
+| 10 | `sys_dup2` | RDI=oldfd, RSI=newfd | newfd or -1 |
+| 11 | `sys_kill` | RDI=pid, RSI=sig | 0 or -1 |
+| 12 | `sys_sigaction` | RDI=sig, RSI=handler | 0 or -1 |
+| 13 | `sys_sigreturn` | — | restores pre-signal context |
+| 14 | `sys_getppid` | — | parent PID |
 
 ### IRQ Mapping (8259 PIC)
 
@@ -452,7 +481,13 @@ Then:
 
 10. **`strtok` is not reentrant.** It uses a static `strtok_state` variable. Don't call from interrupt handlers.
 
-11. **User programs are flat binaries at `0x400000`.** They use `user/syscall.h` for syscalls, NOT kernel headers. Compiled with `USER_CFLAGS` (no `-mcmodel=kernel`).
+11. **Per-process FD table** has 16 slots (PROCESS_MAX_FDS). FDs 0/1/2 are FD_CONSOLE by default. FD types: FD_NONE, FD_VFS, FD_PIPE_READ, FD_PIPE_WRITE, FD_CONSOLE.
+
+12. **Pipes block the calling process** when reading from an empty pipe or writing to a full pipe. `pipe_read()` returns 0 (EOF) when all write ends are closed.
+
+13. **Signals**: SIGKILL cannot be caught. Signal handlers must call `sys_sigreturn()` to restore pre-signal context. Default action for SIGCHLD is ignore; for SIGINT/SIGTERM/SIGKILL/SIGPIPE is terminate.
+
+14. **User programs are flat binaries at `0x400000`.** They use `user/syscall.h` for syscalls, NOT kernel headers. Compiled with `USER_CFLAGS` (no `-mcmodel=kernel`).
 
 12. **User program build pipeline:** `gcc -c` → `ld -T user/user.ld` → `objcopy -O binary` → `objcopy -I binary -O elf64-x86-64` (embeds as `.rodata` in kernel). Symbols: `_binary_<name>_bin_start/end`.
 
