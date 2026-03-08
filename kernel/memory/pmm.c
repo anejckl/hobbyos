@@ -33,9 +33,13 @@ static uint64_t bitmap_size;        /* Size in bytes */
 static uint64_t total_pages;
 static uint64_t free_pages;
 static uint64_t max_phys_addr;
+static uint64_t alloc_hint;         /* Next-fit: start scanning from here */
 
 /* Per-page reference counts (for COW) */
 static uint8_t *page_refcount;
+
+/* Pages below this index are kernel-owned and must never be freed by unref */
+static uint64_t kernel_page_limit = 0;
 
 static inline void bitmap_set(uint64_t page) {
     bitmap[page / 8] |= (1 << (page % 8));
@@ -168,11 +172,14 @@ void pmm_init(uint32_t multiboot_info_phys) {
 }
 
 uint64_t pmm_alloc_page(void) {
-    for (uint64_t i = 0; i < total_pages; i++) {
+    /* Next-fit: scan from hint, wrap around if needed */
+    for (uint64_t j = 0; j < total_pages; j++) {
+        uint64_t i = (alloc_hint + j) % total_pages;
         if (!bitmap_test(i)) {
             bitmap_set(i);
             free_pages--;
             page_refcount[i] = 1;
+            alloc_hint = i + 1;
             return i * PAGE_SIZE;
         }
     }
@@ -182,6 +189,8 @@ uint64_t pmm_alloc_page(void) {
 void pmm_free_page(uint64_t phys_addr) {
     uint64_t page = phys_addr / PAGE_SIZE;
     if (page < total_pages && bitmap_test(page)) {
+        if (kernel_page_limit && page < kernel_page_limit)
+            return;
         bitmap_clear(page);
         page_refcount[page] = 0;
         free_pages++;
@@ -196,6 +205,17 @@ uint64_t pmm_get_total_pages(void) {
     return total_pages;
 }
 
+void pmm_set_kernel_end(void) {
+    /* Find the first free page — everything below it is kernel-owned */
+    for (uint64_t i = 0; i < total_pages; i++) {
+        if (!bitmap_test(i)) {
+            kernel_page_limit = i;
+            return;
+        }
+    }
+    kernel_page_limit = total_pages;
+}
+
 void pmm_page_ref(uint64_t phys_addr) {
     uint64_t page = phys_addr / PAGE_SIZE;
     if (page < total_pages && page_refcount[page] < 255)
@@ -207,6 +227,8 @@ void pmm_page_unref(uint64_t phys_addr) {
     if (page < total_pages && page_refcount[page] > 0) {
         page_refcount[page]--;
         if (page_refcount[page] == 0) {
+            if (kernel_page_limit && page < kernel_page_limit)
+                return;
             bitmap_clear(page);
             free_pages++;
         }

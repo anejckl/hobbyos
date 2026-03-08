@@ -1,5 +1,6 @@
 #include "process.h"
 #include "../memory/kheap.h"
+#include "../memory/vmm.h"
 #include "../scheduler/scheduler.h"
 #include "../string.h"
 #include "../debug/debug.h"
@@ -23,17 +24,19 @@ struct process *process_create(const char *name, void (*entry)(void)) {
     if (!proc)
         return NULL;
 
-    /* Allocate kernel stack */
-    void *stack = kmalloc(PROCESS_STACK_SIZE);
-    if (!stack)
+    /* Allocate kernel stack with guard page */
+    void *guard_and_stack = kmalloc_page_aligned(PAGE_SIZE + PROCESS_STACK_SIZE);
+    if (!guard_and_stack)
         return NULL;
+    vmm_unmap_page((uint64_t)guard_and_stack);  /* Guard page */
 
     /* Initialize PCB */
     proc->pid = next_pid++;
     strncpy(proc->name, name, sizeof(proc->name) - 1);
     proc->name[sizeof(proc->name) - 1] = '\0';
     proc->state = PROCESS_READY;
-    proc->kernel_stack = (uint64_t)stack + PROCESS_STACK_SIZE;
+    proc->kernel_stack_guard = (uint64_t)guard_and_stack;
+    proc->kernel_stack = (uint64_t)guard_and_stack + PAGE_SIZE + PROCESS_STACK_SIZE;
     proc->next = NULL;
     proc->cr3 = 0;
     proc->is_user = false;
@@ -133,7 +136,7 @@ int process_wait_for(uint32_t child_pid, int32_t *status) {
         uint32_t zpid = zombie->pid;
         if (status)
             *status = zombie->exit_code;
-        zombie->state = PROCESS_TERMINATED;
+        zombie->state = PROCESS_UNUSED;
         return (int)zpid;
     }
 
@@ -163,7 +166,7 @@ int process_wait_for(uint32_t child_pid, int32_t *status) {
         uint32_t zpid = zombie->pid;
         if (status)
             *status = zombie->exit_code;
-        zombie->state = PROCESS_TERMINATED;
+        zombie->state = PROCESS_UNUSED;
         return (int)zpid;
     }
 

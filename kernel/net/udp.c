@@ -30,7 +30,7 @@ void udp_receive(struct netbuf *buf, uint32_t src_ip) {
 
 int udp_send(uint32_t dst_ip, uint16_t src_port, uint16_t dst_port,
              const uint8_t *data, uint32_t len) {
-    uint8_t packet[1472 + sizeof(struct udp_header)];
+    static uint8_t packet[1472 + sizeof(struct udp_header)];
     uint32_t total = sizeof(struct udp_header) + len;
     if (total > sizeof(packet))
         return -1;

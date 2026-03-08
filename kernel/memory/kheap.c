@@ -43,6 +43,15 @@ void *kmalloc(size_t size) {
     return ptr;
 }
 
+void *kmalloc_page_aligned(size_t size) {
+    heap_current = (heap_current + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    if (heap_current + size > heap_end)
+        return NULL;
+    void *ptr = (void *)heap_current;
+    heap_current += size;
+    return ptr;
+}
+
 void kfree(void *ptr) {
     /* Bump allocator: kfree is a no-op */
     (void)ptr;

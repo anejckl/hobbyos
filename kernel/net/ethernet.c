@@ -32,7 +32,7 @@ void ethernet_receive(struct netbuf *buf) {
 }
 
 int ethernet_send(const uint8_t *data, uint32_t len, const uint8_t *dst_mac, uint16_t ethertype) {
-    uint8_t frame[1518];
+    static uint8_t frame[1518];
     uint32_t total = ETH_HEADER_LEN + len;
     if (total > sizeof(frame))
         return -1;

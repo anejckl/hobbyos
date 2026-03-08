@@ -6,6 +6,7 @@
 #include "../process/process.h"
 #include "../process/user_process.h"
 #include "../memory/user_vm.h"
+#include "../memory/vmm.h"
 #include "../memory/kheap.h"
 #include "../fs/vfs.h"
 #include "../fs/ramfs.h"
@@ -19,6 +20,9 @@
 #include "../debug/debug.h"
 #include "../net/socket.h"
 #include "../net/tcp.h"
+#include "../elf/elf.h"
+#include "../elf/elf_loader.h"
+#include "../memory/pmm.h"
 
 /* Initialize FD table for a process with console on 0/1/2 */
 void process_fd_init(struct process *proc) {
@@ -37,6 +41,309 @@ static int process_fd_alloc(struct process *proc, int start) {
             return i;
     }
     return -1;
+}
+
+/*
+ * Heavy syscall handlers are extracted into separate noinline functions
+ * to prevent GCC -O2 from merging all switch-case locals into one
+ * giant stack frame (which causes kernel stack overflow).
+ */
+
+__attribute__((noinline))
+static void syscall_exit(struct interrupt_frame *frame, uint64_t arg1) {
+    struct process *cur = scheduler_get_current();
+    struct process *table = process_table_get();
+    debug_printf("syscall: process %u (%s) exit with status %d\n",
+                 (uint64_t)cur->pid, cur->name, arg1);
+
+    /* Close all open FDs */
+    for (int i = 0; i < PROCESS_MAX_FDS; i++) {
+        if (cur->fd_table[i].type == FD_PIPE_READ) {
+            pipe_close_read((struct pipe *)cur->fd_table[i].data);
+            cur->fd_table[i].type = FD_NONE;
+        } else if (cur->fd_table[i].type == FD_PIPE_WRITE) {
+            pipe_close_write((struct pipe *)cur->fd_table[i].data);
+            cur->fd_table[i].type = FD_NONE;
+        } else if (cur->fd_table[i].type == FD_SOCKET) {
+            socket_close((int)(uint64_t)cur->fd_table[i].data);
+            cur->fd_table[i].type = FD_NONE;
+        }
+    }
+
+    /* Free user address space */
+    if (cur->cr3) {
+        uint64_t old_cr3 = cur->cr3;
+        cur->cr3 = 0;
+        write_cr3(scheduler_get_kernel_cr3());
+        user_vm_destroy_address_space(old_cr3);
+    }
+
+    cur->state = PROCESS_ZOMBIE;
+    cur->exit_code = (int32_t)arg1;
+
+    /* Send SIGCHLD to parent */
+    signal_send(cur->ppid, 17); /* SIGCHLD */
+
+    /* Reparent children to PID 1 */
+    for (int i = 0; i < MAX_PROCESSES; i++) {
+        if (table[i].ppid == cur->pid &&
+            table[i].state != PROCESS_UNUSED &&
+            table[i].state != PROCESS_TERMINATED) {
+            table[i].ppid = 1;
+        }
+    }
+
+    /* Wake blocked parent */
+    struct process *parent = process_get_by_pid(cur->ppid);
+    if (parent && parent->state == PROCESS_BLOCKED &&
+        (parent->wait_for_pid == 0 || parent->wait_for_pid == cur->pid)) {
+        parent->state = PROCESS_READY;
+        scheduler_add(parent);
+    }
+
+    schedule();
+    /* Should not return */
+}
+
+__attribute__((noinline))
+static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
+    const char *path = (const char *)arg1;
+    struct process *cur = scheduler_get_current();
+
+    /* Validate pointer is in user space */
+    if ((uint64_t)path >= KERNEL_VMA) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    /* Copy path to kernel buffer before we destroy the address space */
+    char name_buf[32];
+    strncpy(name_buf, path, sizeof(name_buf) - 1);
+    name_buf[sizeof(name_buf) - 1] = '\0';
+
+    /* Try ext2 filesystem first */
+    uint64_t prog_size = 0;
+    const uint8_t *prog_data = NULL;
+    uint8_t *ext2_buf = NULL;
+
+    if (ext2_is_mounted()) {
+        char ext2_path[64];
+        ext2_path[0] = '/';
+        ext2_path[1] = 'b';
+        ext2_path[2] = 'i';
+        ext2_path[3] = 'n';
+        ext2_path[4] = '/';
+        strncpy(ext2_path + 5, name_buf, sizeof(ext2_path) - 6);
+        ext2_path[sizeof(ext2_path) - 1] = '\0';
+
+        uint32_t ino = ext2_path_lookup(ext2_path);
+        if (ino) {
+            struct ext2_inode inode;
+            if (ext2_read_inode(ino, &inode) == 0 && inode.i_size > 0) {
+                ext2_buf = (uint8_t *)kmalloc(inode.i_size);
+                if (ext2_buf) {
+                    int bytes = ext2_read_file(&inode, 0,
+                                               inode.i_size, ext2_buf);
+                    if (bytes > 0) {
+                        prog_data = ext2_buf;
+                        prog_size = (uint64_t)bytes;
+                    }
+                }
+            }
+        }
+    }
+
+    /* Fall back to RAMFS */
+    if (!prog_data)
+        prog_data = ramfs_get_file_data(name_buf, &prog_size);
+
+    if (!prog_data) {
+        debug_printf("syscall: exec '%s' not found\n", name_buf);
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    /* Validate ELF before destroying old address space (point of no return) */
+    if (elf_validate(prog_data, prog_size) < 0) {
+        debug_printf("syscall: exec '%s' invalid ELF\n", name_buf);
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    /* Create new address space */
+    uint64_t new_cr3 = user_vm_create_address_space();
+    if (!new_cr3) {
+        debug_printf("syscall: exec '%s' failed to create address space\n", name_buf);
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    /* Load ELF segments into new address space */
+    struct elf_load_result elf_result;
+    if (elf_load(new_cr3, prog_data, prog_size, &elf_result) < 0) {
+        debug_printf("syscall: exec '%s' ELF load failed\n", name_buf);
+        user_vm_destroy_address_space(new_cr3);
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    /* Allocate and map user stack page */
+    uint64_t stack_phys = pmm_alloc_page();
+    if (!stack_phys) {
+        debug_printf("syscall: exec '%s' stack alloc failed\n", name_buf);
+        user_vm_destroy_address_space(new_cr3);
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+    memset(PHYS_TO_VIRT(stack_phys), 0, PAGE_SIZE);
+    if (user_vm_map_page(new_cr3, USER_STACK_BOTTOM,
+                         stack_phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER) < 0) {
+        pmm_free_page(stack_phys);
+        user_vm_destroy_address_space(new_cr3);
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    /* === Point of no return === */
+
+    /* Destroy old address space */
+    uint64_t old_cr3 = cur->cr3;
+    cur->cr3 = new_cr3;
+    write_cr3(scheduler_get_kernel_cr3());
+    if (old_cr3)
+        user_vm_destroy_address_space(old_cr3);
+
+    /* Switch to new address space */
+    write_cr3(new_cr3);
+
+    /* Copy ELF segment data into mapped user pages.
+     * prog_data is in kernel .rodata (PML4[511]) or kmalloc (PML4[256]),
+     * so it remains accessible after CR3 switch. */
+    const Elf64_Ehdr *ehdr = (const Elf64_Ehdr *)prog_data;
+    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
+        const Elf64_Phdr *phdr = (const Elf64_Phdr *)
+            (prog_data + ehdr->e_phoff + i * ehdr->e_phentsize);
+        if (phdr->p_type != PT_LOAD)
+            continue;
+        if (phdr->p_filesz > 0) {
+            memcpy((void *)phdr->p_vaddr,
+                   prog_data + phdr->p_offset,
+                   phdr->p_filesz);
+        }
+    }
+
+    /* Reset signal handlers: custom handlers → SIG_DFL, keep SIG_IGN */
+    for (int i = 0; i < 32; i++) {
+        if (cur->sig_handlers[i] > 1) /* > SIG_IGN */
+            cur->sig_handlers[i] = 0; /* SIG_DFL */
+    }
+    cur->sig_pending = 0;
+    cur->in_signal_handler = false;
+
+    /* Update process metadata */
+    strncpy(cur->name, name_buf, sizeof(cur->name) - 1);
+    cur->name[sizeof(cur->name) - 1] = '\0';
+    cur->user_program_data = prog_data;
+    cur->user_program_size = prog_size;
+
+    /* Set up interrupt frame to jump to new entry point */
+    frame->rip = elf_result.entry_point;
+    frame->rsp = USER_STACK_TOP;
+    frame->rax = 0;
+    frame->rdi = 0;
+
+    debug_printf("syscall: exec '%s' PID=%u entry=0x%x\n",
+                 name_buf, (uint64_t)cur->pid, elf_result.entry_point);
+
+    /* Return via IRETQ takes process to new entry point — never returns to old code */
+}
+
+__attribute__((noinline))
+static void syscall_fork(struct interrupt_frame *frame) {
+    struct process *parent = scheduler_get_current();
+
+    /* 1. Allocate child PCB slot */
+    struct process *child = process_alloc();
+    if (!child) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    /* 2. Allocate child kernel stack with guard page */
+    void *child_guard_and_stack = kmalloc_page_aligned(PAGE_SIZE + PROCESS_STACK_SIZE);
+    if (!child_guard_and_stack) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+    vmm_unmap_page((uint64_t)child_guard_and_stack);  /* Guard page */
+    uint64_t child_kstack_top = (uint64_t)child_guard_and_stack + PAGE_SIZE + PROCESS_STACK_SIZE;
+
+    /* 3. Clone parent address space (COW) */
+    uint64_t child_cr3 = user_vm_fork_address_space(parent->cr3);
+    if (!child_cr3) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    /* 4. Copy interrupt frame to child's kernel stack */
+    uint64_t frame_size = sizeof(struct interrupt_frame);
+    struct interrupt_frame *child_frame =
+        (struct interrupt_frame *)(child_kstack_top - frame_size);
+    memcpy(child_frame, frame, frame_size);
+
+    /* 5. Child returns 0 from fork */
+    child_frame->rax = 0;
+
+    /* 6. Set up child PCB */
+    strncpy(child->name, parent->name, sizeof(child->name) - 1);
+    child->name[sizeof(child->name) - 1] = '\0';
+    child->state = PROCESS_READY;
+    child->kernel_stack_guard = (uint64_t)child_guard_and_stack;
+    child->kernel_stack = child_kstack_top;
+    child->next = NULL;
+    child->cr3 = child_cr3;
+    child->is_user = true;
+    child->user_program_data = parent->user_program_data;
+    child->user_program_size = parent->user_program_size;
+    child->ppid = parent->pid;
+    child->exit_code = 0;
+    child->wait_for_pid = 0;
+
+    /* 7. Copy parent's FD table to child */
+    memcpy(child->fd_table, parent->fd_table, sizeof(parent->fd_table));
+
+    /* Increment refcounts for shared pipes and sockets */
+    for (int i = 0; i < PROCESS_MAX_FDS; i++) {
+        if (child->fd_table[i].type == FD_PIPE_READ ||
+            child->fd_table[i].type == FD_PIPE_WRITE) {
+            struct pipe *p = (struct pipe *)child->fd_table[i].data;
+            if (p) {
+                pipe_inc_ref(p, child->fd_table[i].type);
+            }
+        } else if (child->fd_table[i].type == FD_SOCKET) {
+            socket_inc_ref((int)(uint64_t)child->fd_table[i].data);
+        }
+    }
+
+    /* 8. Copy signal handlers */
+    memcpy(child->sig_handlers, parent->sig_handlers,
+           sizeof(parent->sig_handlers));
+    child->sig_pending = 0;
+    child->in_signal_handler = false;
+
+    /* 9. Set context so scheduler jumps to fork_return_trampoline */
+    memset(&child->context, 0, sizeof(struct context));
+    child->context.rip = (uint64_t)fork_return_trampoline;
+    child->context.rsp = (uint64_t)child_frame;
+
+    /* 10. Add child to scheduler */
+    scheduler_add(child);
+
+    debug_printf("syscall: fork: parent PID=%u -> child PID=%u\n",
+                 (uint64_t)parent->pid, (uint64_t)child->pid);
+
+    /* 11. Parent returns child PID */
+    frame->rax = (uint64_t)child->pid;
 }
 
 /* Syscall handler for INT 0x80 */
@@ -118,54 +425,9 @@ static void syscall_handler(struct interrupt_frame *frame) {
         return;
     }
 
-    case SYS_EXIT: {
-        /* sys_exit(status) */
-        struct process *cur = scheduler_get_current();
-        struct process *table = process_table_get();
-        debug_printf("syscall: process %u (%s) exit with status %d\n",
-                     (uint64_t)cur->pid, cur->name, arg1);
-
-        /* Close all open FDs */
-        for (int i = 0; i < PROCESS_MAX_FDS; i++) {
-            if (cur->fd_table[i].type == FD_PIPE_READ) {
-                pipe_close_read((struct pipe *)cur->fd_table[i].data);
-                cur->fd_table[i].type = FD_NONE;
-            } else if (cur->fd_table[i].type == FD_PIPE_WRITE) {
-                pipe_close_write((struct pipe *)cur->fd_table[i].data);
-                cur->fd_table[i].type = FD_NONE;
-            } else if (cur->fd_table[i].type == FD_SOCKET) {
-                socket_close((int)(uint64_t)cur->fd_table[i].data);
-                cur->fd_table[i].type = FD_NONE;
-            }
-        }
-
-        cur->state = PROCESS_ZOMBIE;
-        cur->exit_code = (int32_t)arg1;
-
-        /* Send SIGCHLD to parent */
-        signal_send(cur->ppid, 17); /* SIGCHLD */
-
-        /* Reparent children to PID 1 */
-        for (int i = 0; i < MAX_PROCESSES; i++) {
-            if (table[i].ppid == cur->pid &&
-                table[i].state != PROCESS_UNUSED &&
-                table[i].state != PROCESS_TERMINATED) {
-                table[i].ppid = 1;
-            }
-        }
-
-        /* Wake blocked parent */
-        struct process *parent = process_get_by_pid(cur->ppid);
-        if (parent && parent->state == PROCESS_BLOCKED &&
-            (parent->wait_for_pid == 0 || parent->wait_for_pid == cur->pid)) {
-            parent->state = PROCESS_READY;
-            scheduler_add(parent);
-        }
-
-        schedule();
-        /* Should not return */
+    case SYS_EXIT:
+        syscall_exit(frame, arg1);
         return;
-    }
 
     case SYS_GETPID: {
         struct process *cur = scheduler_get_current();
@@ -173,159 +435,13 @@ static void syscall_handler(struct interrupt_frame *frame) {
         return;
     }
 
-    case SYS_EXEC: {
-        /* sys_exec(path) — path is a user-space string */
-        const char *path = (const char *)arg1;
-        struct process *cur = scheduler_get_current();
-
-        /* Validate pointer is in user space */
-        if ((uint64_t)path >= KERNEL_VMA) {
-            frame->rax = (uint64_t)-1;
-            return;
-        }
-
-        /* Try ext2 filesystem first */
-        uint64_t prog_size = 0;
-        const uint8_t *prog_data = NULL;
-        uint8_t *ext2_buf = NULL;
-
-        if (ext2_is_mounted()) {
-            /* Try /bin/<name> on ext2 */
-            char ext2_path[64];
-            ext2_path[0] = '/';
-            ext2_path[1] = 'b';
-            ext2_path[2] = 'i';
-            ext2_path[3] = 'n';
-            ext2_path[4] = '/';
-            strncpy(ext2_path + 5, path, sizeof(ext2_path) - 6);
-            ext2_path[sizeof(ext2_path) - 1] = '\0';
-
-            uint32_t ino = ext2_path_lookup(ext2_path);
-            if (ino) {
-                struct ext2_inode inode;
-                if (ext2_read_inode(ino, &inode) == 0 && inode.i_size > 0) {
-                    ext2_buf = (uint8_t *)kmalloc(inode.i_size);
-                    if (ext2_buf) {
-                        int bytes = ext2_read_file(&inode, 0,
-                                                   inode.i_size, ext2_buf);
-                        if (bytes > 0) {
-                            prog_data = ext2_buf;
-                            prog_size = (uint64_t)bytes;
-                        }
-                    }
-                }
-            }
-        }
-
-        /* Fall back to RAMFS */
-        if (!prog_data)
-            prog_data = ramfs_get_file_data(path, &prog_size);
-
-        if (!prog_data) {
-            debug_printf("syscall: exec '%s' not found\n", path);
-            frame->rax = (uint64_t)-1;
-            return;
-        }
-
-        /* Create new process from ELF data */
-        if (user_process_create(path, prog_data, prog_size, cur->pid) < 0) {
-            frame->rax = (uint64_t)-1;
-            return;
-        }
-
-        frame->rax = 0;
+    case SYS_EXEC:
+        syscall_exec(frame, arg1);
         return;
-    }
 
-    case SYS_FORK: {
-        /* sys_fork() → parent gets child PID, child gets 0 */
-        struct process *parent = scheduler_get_current();
-
-        /* 1. Allocate child PCB slot */
-        struct process *child = process_alloc();
-        if (!child) {
-            frame->rax = (uint64_t)-1;
-            return;
-        }
-
-        /* 2. Allocate child kernel stack */
-        void *child_kstack = kmalloc(PROCESS_STACK_SIZE);
-        if (!child_kstack) {
-            frame->rax = (uint64_t)-1;
-            return;
-        }
-        uint64_t child_kstack_top = (uint64_t)child_kstack + PROCESS_STACK_SIZE;
-
-        /* 3. Clone parent address space (COW) */
-        uint64_t child_cr3 = user_vm_fork_address_space(parent->cr3);
-        if (!child_cr3) {
-            frame->rax = (uint64_t)-1;
-            return;
-        }
-
-        /* 4. Copy interrupt frame to child's kernel stack */
-        uint64_t frame_size = sizeof(struct interrupt_frame);
-        struct interrupt_frame *child_frame =
-            (struct interrupt_frame *)(child_kstack_top - frame_size);
-        memcpy(child_frame, frame, frame_size);
-
-        /* 5. Child returns 0 from fork */
-        child_frame->rax = 0;
-
-        /* 6. Set up child PCB */
-        strncpy(child->name, parent->name, sizeof(child->name) - 1);
-        child->name[sizeof(child->name) - 1] = '\0';
-        child->state = PROCESS_READY;
-        child->kernel_stack = child_kstack_top;
-        child->next = NULL;
-        child->cr3 = child_cr3;
-        child->is_user = true;
-        child->user_program_data = parent->user_program_data;
-        child->user_program_size = parent->user_program_size;
-        child->ppid = parent->pid;
-        child->exit_code = 0;
-        child->wait_for_pid = 0;
-
-        /* 7. Copy parent's FD table to child */
-        memcpy(child->fd_table, parent->fd_table, sizeof(parent->fd_table));
-
-        /* Increment refcounts for shared pipes and sockets */
-        for (int i = 0; i < PROCESS_MAX_FDS; i++) {
-            if (child->fd_table[i].type == FD_PIPE_READ ||
-                child->fd_table[i].type == FD_PIPE_WRITE) {
-                /* Pipe refcounts handled by pipe_create's initial setup:
-                 * readers/writers count tracks open ends. Increment on fork. */
-                struct pipe *p = (struct pipe *)child->fd_table[i].data;
-                if (p) {
-                    /* Access pipe fields directly (defined in pipe.h) */
-                    pipe_inc_ref(p, child->fd_table[i].type);
-                }
-            } else if (child->fd_table[i].type == FD_SOCKET) {
-                socket_inc_ref((int)(uint64_t)child->fd_table[i].data);
-            }
-        }
-
-        /* 8. Copy signal handlers */
-        memcpy(child->sig_handlers, parent->sig_handlers,
-               sizeof(parent->sig_handlers));
-        child->sig_pending = 0;
-        child->in_signal_handler = false;
-
-        /* 9. Set context so scheduler jumps to fork_return_trampoline */
-        memset(&child->context, 0, sizeof(struct context));
-        child->context.rip = (uint64_t)fork_return_trampoline;
-        child->context.rsp = (uint64_t)child_frame;
-
-        /* 10. Add child to scheduler */
-        scheduler_add(child);
-
-        debug_printf("syscall: fork: parent PID=%u -> child PID=%u\n",
-                     (uint64_t)parent->pid, (uint64_t)child->pid);
-
-        /* 11. Parent returns child PID */
-        frame->rax = (uint64_t)child->pid;
+    case SYS_FORK:
+        syscall_fork(frame);
         return;
-    }
 
     case SYS_WAIT: {
         /* sys_wait(int32_t *status) → returns child PID or -1 */
@@ -344,7 +460,7 @@ static void syscall_handler(struct interrupt_frame *frame) {
             uint32_t zpid = zombie->pid;
             if (status_ptr)
                 *status_ptr = zombie->exit_code;
-            zombie->state = PROCESS_TERMINATED;
+            zombie->state = PROCESS_UNUSED;
             frame->rax = (uint64_t)zpid;
             return;
         }
@@ -369,7 +485,7 @@ static void syscall_handler(struct interrupt_frame *frame) {
             uint32_t zpid = zombie->pid;
             if (status_ptr)
                 *status_ptr = zombie->exit_code;
-            zombie->state = PROCESS_TERMINATED;
+            zombie->state = PROCESS_UNUSED;
             frame->rax = (uint64_t)zpid;
             return;
         }
@@ -805,7 +921,7 @@ static void syscall_handler(struct interrupt_frame *frame) {
                 if (ext2_is_mounted()) {
                     struct ext2_inode root_inode;
                     if (ext2_read_inode(EXT2_ROOT_INODE, &root_inode) == 0) {
-                        uint8_t dir_buf[4096];
+                        static uint8_t dir_buf[4096];
                         uint32_t dir_size = root_inode.i_size;
                         if (dir_size > sizeof(dir_buf))
                             dir_size = sizeof(dir_buf);
@@ -846,19 +962,19 @@ static void syscall_handler(struct interrupt_frame *frame) {
                 (inode.i_mode & EXT2_S_IFDIR)) {
                 /* Read directory data into a temp buffer */
                 uint32_t dir_size = inode.i_size;
-                uint8_t dir_buf[4096];
-                if (dir_size > sizeof(dir_buf))
-                    dir_size = sizeof(dir_buf);
-                int rd = ext2_read_file(&inode, 0, dir_size, dir_buf);
+                static uint8_t dir_buf2[4096];
+                if (dir_size > sizeof(dir_buf2))
+                    dir_size = sizeof(dir_buf2);
+                int rd = ext2_read_file(&inode, 0, dir_size, dir_buf2);
                 if (rd > 0) {
                     uint32_t pos = 0;
                     while (pos < (uint32_t)rd) {
                         struct ext2_dir_entry *de =
-                            (struct ext2_dir_entry *)(dir_buf + pos);
+                            (struct ext2_dir_entry *)(dir_buf2 + pos);
                         if (de->rec_len == 0)
                             break;
                         if (de->inode != 0 && de->name_len > 0) {
-                            char *de_name = (char *)(dir_buf + pos +
+                            char *de_name = (char *)(dir_buf2 + pos +
                                             sizeof(struct ext2_dir_entry));
                             uint8_t nlen = de->name_len;
                             uint32_t entry_size = 5 + nlen;
@@ -1194,6 +1310,94 @@ static void syscall_handler(struct interrupt_frame *frame) {
             if (ready_write & (1U << i)) count++;
         }
         frame->rax = (uint64_t)count;
+        return;
+    }
+
+    case SYS_WAITPID: {
+        /* sys_waitpid(pid, status_ptr, options) */
+        int32_t wait_pid = (int32_t)arg1;
+        int32_t *status_ptr = (int32_t *)arg2;
+        /* arg3 = options, reserved for future use */
+
+        struct process *cur = scheduler_get_current();
+
+        /* Validate pointer if non-NULL */
+        if (status_ptr && (uint64_t)status_ptr >= KERNEL_VMA) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        if (wait_pid > 0) {
+            /* Wait for specific child */
+            struct process *child = process_get_by_pid((uint32_t)wait_pid);
+            if (!child || child->ppid != cur->pid) {
+                frame->rax = (uint64_t)-1;
+                return;
+            }
+
+            if (child->state == PROCESS_ZOMBIE) {
+                if (status_ptr)
+                    *status_ptr = child->exit_code;
+                uint32_t zpid = child->pid;
+                child->state = PROCESS_UNUSED;
+                frame->rax = (uint64_t)zpid;
+                return;
+            }
+
+            /* Block until this specific child exits */
+            cur->wait_for_pid = (uint32_t)wait_pid;
+            cur->state = PROCESS_BLOCKED;
+            schedule();
+            sti();
+
+            /* Resumed — check again */
+            child = process_get_by_pid((uint32_t)wait_pid);
+            if (child && child->ppid == cur->pid &&
+                child->state == PROCESS_ZOMBIE) {
+                if (status_ptr)
+                    *status_ptr = child->exit_code;
+                uint32_t zpid = child->pid;
+                child->state = PROCESS_UNUSED;
+                frame->rax = (uint64_t)zpid;
+                return;
+            }
+
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        /* wait_pid <= 0: wait for any child (same as SYS_WAIT) */
+        struct process *zombie = process_find_zombie_child(cur->pid);
+        if (zombie) {
+            uint32_t zpid = zombie->pid;
+            if (status_ptr)
+                *status_ptr = zombie->exit_code;
+            zombie->state = PROCESS_UNUSED;
+            frame->rax = (uint64_t)zpid;
+            return;
+        }
+
+        if (!process_has_children(cur->pid)) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        cur->wait_for_pid = 0;
+        cur->state = PROCESS_BLOCKED;
+        schedule();
+        sti();
+
+        zombie = process_find_zombie_child(cur->pid);
+        if (zombie) {
+            uint32_t zpid = zombie->pid;
+            if (status_ptr)
+                *status_ptr = zombie->exit_code;
+            zombie->state = PROCESS_UNUSED;
+            frame->rax = (uint64_t)zpid;
+            return;
+        }
+
+        frame->rax = (uint64_t)-1;
         return;
     }
 

@@ -14,6 +14,9 @@ static uint32_t inode_size = 128;
 /* Scratch buffer for disk I/O (1 block, max 4096 bytes) */
 static uint8_t block_buf[4096];
 
+/* Scratch buffer for indirect block lookups (avoids 4KB stack allocations) */
+static uint32_t ind_buf[1024];
+
 /* Read a filesystem block into buffer */
 static int ext2_read_block(uint32_t block_no, void *buf) {
     uint32_t sectors_per_block = block_size / 512;
@@ -28,7 +31,7 @@ int ext2_init(void) {
     }
 
     /* Read superblock (at byte offset 1024 = LBA 2) */
-    uint8_t sb_buf[1024];
+    static uint8_t sb_buf[1024];
     if (ata_read_sectors(2, 2, sb_buf) < 0) {
         debug_printf("ext2: failed to read superblock\n");
         return -1;
@@ -114,7 +117,6 @@ static uint32_t ext2_get_block(struct ext2_inode *inode, uint32_t block_idx) {
         uint32_t indirect_block = inode->i_block[12];
         if (indirect_block == 0)
             return 0;
-        uint32_t ind_buf[1024];  /* Max 4096/4 = 1024 entries */
         if (ext2_read_block(indirect_block, ind_buf) < 0)
             return 0;
         return ind_buf[block_idx];
@@ -126,17 +128,15 @@ static uint32_t ext2_get_block(struct ext2_inode *inode, uint32_t block_idx) {
         uint32_t dind_block = inode->i_block[13];
         if (dind_block == 0)
             return 0;
-        uint32_t dind_buf[1024];
-        if (ext2_read_block(dind_block, dind_buf) < 0)
+        if (ext2_read_block(dind_block, ind_buf) < 0)
             return 0;
 
         uint32_t ind_idx = block_idx / ptrs_per_block;
         uint32_t dir_idx = block_idx % ptrs_per_block;
 
-        uint32_t ind_block = dind_buf[ind_idx];
+        uint32_t ind_block = ind_buf[ind_idx];
         if (ind_block == 0)
             return 0;
-        uint32_t ind_buf[1024];
         if (ext2_read_block(ind_block, ind_buf) < 0)
             return 0;
         return ind_buf[dir_idx];
@@ -425,7 +425,7 @@ int ext2_write_inode(uint32_t ino, const struct ext2_inode *inode) {
 /* Flush superblock and BGDT to disk */
 static void ext2_flush_metadata(void) {
     /* Write superblock at LBA 2 */
-    uint8_t sb_buf[1024];
+    static uint8_t sb_buf[1024];
     memset(sb_buf, 0, sizeof(sb_buf));
     memcpy(sb_buf, &sb, sizeof(struct ext2_superblock));
     ata_write_sectors(2, 2, sb_buf);
@@ -461,11 +461,10 @@ static int ext2_set_block(struct ext2_inode *inode, uint32_t block_idx,
             memset(block_buf, 0, block_size);
             ext2_write_block(ind, block_buf);
         }
-        uint32_t ind_data[1024];
-        if (ext2_read_block(inode->i_block[12], ind_data) < 0)
+        if (ext2_read_block(inode->i_block[12], ind_buf) < 0)
             return -1;
-        ind_data[block_idx] = disk_block;
-        return ext2_write_block(inode->i_block[12], ind_data);
+        ind_buf[block_idx] = disk_block;
+        return ext2_write_block(inode->i_block[12], ind_buf);
     }
 
     /* Doubly indirect not implemented for 16MB disk */
@@ -811,12 +810,11 @@ int ext2_unlink(uint32_t parent_ino, const char *name) {
         }
         /* Free indirect block if present */
         if (inode.i_block[12]) {
-            uint32_t ind_data[1024];
-            if (ext2_read_block(inode.i_block[12], ind_data) == 0) {
+            if (ext2_read_block(inode.i_block[12], ind_buf) == 0) {
                 uint32_t ptrs = block_size / 4;
                 for (uint32_t i = 0; i < ptrs; i++) {
-                    if (ind_data[i])
-                        ext2_free_block(ind_data[i]);
+                    if (ind_buf[i])
+                        ext2_free_block(ind_buf[i]);
                 }
             }
             ext2_free_block(inode.i_block[12]);

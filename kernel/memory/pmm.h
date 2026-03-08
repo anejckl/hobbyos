@@ -14,4 +14,8 @@ void pmm_page_ref(uint64_t phys_addr);
 void pmm_page_unref(uint64_t phys_addr);
 uint8_t pmm_page_refcount(uint64_t phys_addr);
 
+/* Mark the current allocation frontier as the kernel/user boundary.
+ * Pages below this threshold won't be freed by pmm_page_unref. */
+void pmm_set_kernel_end(void);
+
 #endif /* PMM_H */

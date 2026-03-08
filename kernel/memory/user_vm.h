@@ -29,4 +29,9 @@ uint64_t *user_vm_get_pte(uint64_t pml4_phys, uint64_t virt);
 /* Handle a COW page fault. Returns 0 if handled, -1 if not a COW fault. */
 int cow_handle_fault(uint64_t pml4_phys, uint64_t fault_addr);
 
+/* Destroy a user address space: free all user pages and page tables.
+ * Must be called while NOT using this PML4 as the active CR3.
+ * Handles COW pages correctly (decrements refcount, frees only if sole owner). */
+void user_vm_destroy_address_space(uint64_t pml4_phys);
+
 #endif /* USER_VM_H */

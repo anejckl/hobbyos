@@ -96,3 +96,7 @@ void schedule(void) {
 struct process *scheduler_get_current(void) {
     return current_process;
 }
+
+uint64_t scheduler_get_kernel_cr3(void) {
+    return kernel_cr3;
+}

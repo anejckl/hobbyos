@@ -14,6 +14,8 @@ static const char *test_programs[] = {
     "signal_test",
     "procfs_test",
     "net_test",
+    "exec_test",
+    "waitpid_test",
     NULL
 };
 

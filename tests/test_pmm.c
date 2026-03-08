@@ -49,6 +49,8 @@ void pmm_test_setup(uint64_t num_pages) {
     bitmap_size = (num_pages + 7) / 8;
     free_pages = 0;
     max_phys_addr = num_pages * PAGE_SIZE;
+    alloc_hint = 0;
+    kernel_page_limit = 0;
 
     /* Mark all pages as used */
     memset(bitmap, 0xFF, bitmap_size);
@@ -109,7 +111,8 @@ static void test_alloc_free(void) {
     pmm_free_page(addr1);
     TEST("free count after free", pmm_get_free_pages() == 9);
     uint64_t addr3 = pmm_alloc_page();
-    TEST("realloc returns freed page", addr3 == addr1);
+    /* Next-fit: continues from hint (page 12), not freed page 10 */
+    TEST("next-fit alloc continues forward", addr3 == 12 * PAGE_SIZE);
 }
 
 static void test_alloc_exhaustion(void) {

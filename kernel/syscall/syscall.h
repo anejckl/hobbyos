@@ -29,6 +29,7 @@
 #define SYS_ACCEPT      22
 #define SYS_CONNECT     23
 #define SYS_SELECT      24
+#define SYS_WAITPID     25
 
 void syscall_init(void);
 

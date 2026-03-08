@@ -185,6 +185,61 @@ uint64_t user_vm_fork_address_space(uint64_t parent_pml4_phys) {
     return child_pml4_phys;
 }
 
+void user_vm_destroy_address_space(uint64_t pml4_phys) {
+    uint64_t *pml4 = (uint64_t *)PHYS_TO_VIRT(pml4_phys);
+
+    /* Walk user-space PML4 entries only (0-255), skip kernel entries (256, 511) */
+    for (int pml4_i = 0; pml4_i < 256; pml4_i++) {
+        if (!(pml4[pml4_i] & PTE_PRESENT))
+            continue;
+
+        uint64_t pdpt_phys = pml4[pml4_i] & PTE_ADDR_MASK;
+        uint64_t *pdpt = (uint64_t *)PHYS_TO_VIRT(pdpt_phys);
+
+        for (int pdpt_i = 0; pdpt_i < 512; pdpt_i++) {
+            if (!(pdpt[pdpt_i] & PTE_PRESENT))
+                continue;
+            if (pdpt[pdpt_i] & PTE_HUGE)
+                continue;
+
+            uint64_t pd_phys = pdpt[pdpt_i] & PTE_ADDR_MASK;
+            uint64_t *pd = (uint64_t *)PHYS_TO_VIRT(pd_phys);
+
+            for (int pd_i = 0; pd_i < 512; pd_i++) {
+                if (!(pd[pd_i] & PTE_PRESENT))
+                    continue;
+                if (pd[pd_i] & PTE_HUGE)
+                    continue;
+
+                uint64_t pt_phys = pd[pd_i] & PTE_ADDR_MASK;
+                uint64_t *pt = (uint64_t *)PHYS_TO_VIRT(pt_phys);
+
+                /* Unref all leaf (data) pages in this PT */
+                for (int pt_i = 0; pt_i < 512; pt_i++) {
+                    if (!(pt[pt_i] & PTE_PRESENT))
+                        continue;
+                    uint64_t leaf_phys = pt[pt_i] & PTE_ADDR_MASK;
+                    pmm_page_unref(leaf_phys);
+                }
+
+                /* Free the PT page itself */
+                pmm_free_page(pt_phys);
+            }
+
+            /* Free the PD page */
+            pmm_free_page(pd_phys);
+        }
+
+        /* Free the PDPT page */
+        pmm_free_page(pdpt_phys);
+    }
+
+    /* Free the PML4 page itself */
+    pmm_free_page(pml4_phys);
+
+    debug_printf("user_vm: destroyed address space PML4=0x%x\n", pml4_phys);
+}
+
 int cow_handle_fault(uint64_t pml4_phys, uint64_t fault_addr) {
     uint64_t *pte = user_vm_get_pte(pml4_phys, fault_addr);
     if (!pte)

@@ -56,7 +56,7 @@ void ipv4_receive(struct netbuf *buf) {
 }
 
 int ipv4_send(const uint8_t *data, uint32_t len, uint32_t dst_ip, uint8_t protocol) {
-    uint8_t packet[1500];
+    static uint8_t packet[1500];
     uint32_t total = sizeof(struct ipv4_header) + len;
     if (total > sizeof(packet))
         return -1;

@@ -7,7 +7,7 @@ OBJCOPY := $(shell command -v x86_64-elf-objcopy 2>/dev/null || echo objcopy)
 AS = nasm
 
 CFLAGS = -ffreestanding -mno-red-zone -mcmodel=kernel -Wall -Wextra \
-         -fno-stack-protector -fno-pic -nostdlib -nostdinc -Ikernel -O2 -g \
+         -fno-stack-protector -fstack-clash-protection -fno-pic -nostdlib -nostdinc -Ikernel -O2 -g \
          -mno-sse -mno-sse2 -mno-mmx -mno-avx -MMD -MP
 ASFLAGS = -f elf64 -g
 LDFLAGS = -T linker.ld -nostdlib -z max-page-size=0x1000
@@ -82,7 +82,7 @@ C_OBJS = $(C_SRCS:.c=.o)
 C_DEPS = $(C_OBJS:.o=.d)
 
 # User program embedded objects
-USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm net_test nc httpd ping
+USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm net_test nc httpd ping exec_test waitpid_test
 USER_EMBED_OBJS = $(patsubst %,user/%_embed.o,$(USER_PROGRAMS))
 
 OBJS = $(ASM_OBJS) $(C_OBJS) $(USER_EMBED_OBJS)

@@ -302,7 +302,7 @@ static void cmd_ls(int argc, char **argv) {
             struct ext2_inode inode;
             if (ext2_read_inode(ino, &inode) == 0 &&
                 (inode.i_mode & EXT2_S_IFDIR)) {
-                uint8_t dir_buf[4096];
+                static uint8_t dir_buf[4096];
                 uint32_t dir_size = inode.i_size;
                 if (dir_size > sizeof(dir_buf))
                     dir_size = sizeof(dir_buf);
@@ -350,22 +350,22 @@ static void cmd_ls(int argc, char **argv) {
             struct ext2_inode inode;
             if (ext2_read_inode(ino, &inode) == 0 &&
                 (inode.i_mode & EXT2_S_IFDIR)) {
-                uint8_t dir_buf[4096];
+                static uint8_t dir_buf2[4096];
                 uint32_t dir_size = inode.i_size;
-                if (dir_size > sizeof(dir_buf))
-                    dir_size = sizeof(dir_buf);
-                int rd = ext2_read_file(&inode, 0, dir_size, dir_buf);
+                if (dir_size > sizeof(dir_buf2))
+                    dir_size = sizeof(dir_buf2);
+                int rd = ext2_read_file(&inode, 0, dir_size, dir_buf2);
                 if (rd > 0) {
                     uint32_t pos = 0;
                     while (pos < (uint32_t)rd) {
                         struct ext2_dir_entry *de =
-                            (struct ext2_dir_entry *)(dir_buf + pos);
+                            (struct ext2_dir_entry *)(dir_buf2 + pos);
                         if (de->rec_len == 0)
                             break;
                         if (de->inode != 0 && de->name_len > 0) {
                             char dname[256];
                             uint8_t nlen = de->name_len;
-                            memcpy(dname, dir_buf + pos +
+                            memcpy(dname, dir_buf2 + pos +
                                    sizeof(struct ext2_dir_entry), nlen);
                             dname[nlen] = '\0';
                             /* Skip . and .. */

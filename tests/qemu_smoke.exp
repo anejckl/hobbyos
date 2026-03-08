@@ -51,4 +51,12 @@ AUTOTEST: procfs_test exited with status 0
 AUTOTEST: running net_test
 net_test: PASS - all socket tests passed
 AUTOTEST: net_test exited with status 0
+# Exec test
+AUTOTEST: running exec_test
+exec_test: PASS - fork/exec/wait works!
+AUTOTEST: exec_test exited with status 0
+# Waitpid test
+AUTOTEST: running waitpid_test
+waitpid_test: PASS
+AUTOTEST: waitpid_test exited with status 0
 AUTOTEST: all tests passed

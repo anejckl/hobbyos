@@ -75,7 +75,7 @@ static uint16_t tcp_checksum(const void *tcp_data, uint32_t tcp_len,
 
 static int tcp_send_segment(int idx, uint8_t flags, const uint8_t *data, uint32_t data_len) {
     struct tcp_connection *c = &conns[idx];
-    uint8_t packet[1500];
+    static uint8_t packet[1500];
     uint32_t hdr_len = sizeof(struct tcp_header);
     uint32_t total = hdr_len + data_len;
     if (total > sizeof(packet))

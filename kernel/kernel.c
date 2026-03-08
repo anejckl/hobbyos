@@ -192,6 +192,9 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
             scheduler_add(net);
     }
 
+    /* Mark kernel page boundary — pages below this are never freed by unref */
+    pmm_set_kernel_end();
+
     /* Enable interrupts */
     sti();
     vga_printf("[OK] Interrupts enabled\n\n");

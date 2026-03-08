@@ -112,6 +112,47 @@ static void page_fault_handler(struct interrupt_frame *frame) {
         }
     }
 
+    /* Check for kernel stack overflow (guard page hit) */
+    if (!(err & 0x4) && !(err & 0x1)) {  /* kernel mode, not-present */
+        /* Check current process's guard page */
+        struct process *cur = scheduler_get_current();
+        if (cur && cur->kernel_stack_guard &&
+            cr2 >= cur->kernel_stack_guard &&
+            cr2 < cur->kernel_stack_guard + PAGE_SIZE) {
+            vga_set_color(VGA_WHITE, VGA_RED);
+            vga_printf("\n*** KERNEL STACK OVERFLOW ***\n");
+            vga_printf("PID %u (%s) overflowed its kernel stack!\n",
+                       (uint64_t)cur->pid, cur->name);
+            vga_printf("Guard page: 0x%x  Fault addr: 0x%x  RIP: 0x%x\n",
+                       cur->kernel_stack_guard, cr2, frame->rip);
+            debug_printf("KERNEL STACK OVERFLOW: PID=%u name=%s guard=0x%x addr=0x%x RIP=0x%x\n",
+                         (uint64_t)cur->pid, cur->name,
+                         cur->kernel_stack_guard, cr2, frame->rip);
+            kpanic("kernel stack overflow");
+        }
+
+        /* Also scan all processes (defensive — the faulting process
+           might be corrupting another process's guard) */
+        struct process *table = process_table_get();
+        for (int i = 0; i < MAX_PROCESSES; i++) {
+            if (table[i].state != PROCESS_UNUSED &&
+                table[i].kernel_stack_guard &&
+                cr2 >= table[i].kernel_stack_guard &&
+                cr2 < table[i].kernel_stack_guard + PAGE_SIZE) {
+                vga_set_color(VGA_WHITE, VGA_RED);
+                vga_printf("\n*** KERNEL STACK OVERFLOW ***\n");
+                vga_printf("Guard page hit for PID %u (%s)!\n",
+                           (uint64_t)table[i].pid, table[i].name);
+                vga_printf("Guard page: 0x%x  Fault addr: 0x%x  RIP: 0x%x\n",
+                           table[i].kernel_stack_guard, cr2, frame->rip);
+                debug_printf("KERNEL STACK OVERFLOW: PID=%u name=%s guard=0x%x addr=0x%x RIP=0x%x\n",
+                             (uint64_t)table[i].pid, table[i].name,
+                             table[i].kernel_stack_guard, cr2, frame->rip);
+                kpanic("kernel stack overflow");
+            }
+        }
+    }
+
     /* Kernel page fault — fatal */
     vga_set_color(VGA_WHITE, VGA_RED);
     vga_printf("\n*** PAGE FAULT ***\n");

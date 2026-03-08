@@ -76,7 +76,7 @@ git commit --allow-empty -m "Trigger CI" && git push
 
 ### Interactive Test Output (`make test-interactive`)
 
-Runs 20 tests by sending keystrokes to QEMU via monitor socket and checking serial output. Creates a fresh ext2 disk image, boots the OS, waits for autotests to pass, then exercises shell commands, user programs, ext2 operations, TTY editing, and Ctrl+C.
+Runs 21 tests by sending keystrokes to QEMU via monitor socket and checking serial output. Creates a fresh ext2 disk image, boots the OS, waits for autotests to pass, then exercises shell commands, user programs, ext2 operations, TTY editing, and Ctrl+C.
 
 **Output files:**
 - `tests/interactive_serial.log` — Full serial transcript from QEMU
@@ -84,10 +84,12 @@ Runs 20 tests by sending keystrokes to QEMU via monitor socket and checking seri
 
 **JSON format:**
 ```json
-{"total": 20, "passed": 20, "failed": 0, "tests": [{"name": "boot_and_autotests", "passed": true, ...}, ...]}
+{"total": 21, "passed": 21, "failed": 0, "tests": [{"name": "boot_and_autotests", "passed": true, ...}, ...]}
 ```
 
 **For AI agents:** After running `make test-interactive`, read `tests/interactive_results.json` to see which tests passed/failed and inspect `tests/interactive_serial.log` for debugging.
+
+**WARNING — Timing sensitivity:** Interactive tests run inside Docker with QEMU TCG (software emulation), which has variable timing. Tests that pass natively may fail in Docker due to slower keystroke delivery or delayed serial output. If interactive tests fail but `test-host` and `test-qemu` both pass, **re-run once before investigating** — a single failure is likely a timing fluke, not a real bug. Only investigate if failures are reproducible across 2-3 consecutive runs.
 
 ### Line Endings
 
@@ -306,6 +308,7 @@ hobbyos/
 | 12 | `sys_sigaction` | RDI=sig, RSI=handler | 0 or -1 |
 | 13 | `sys_sigreturn` | — | restores pre-signal context |
 | 14 | `sys_getppid` | — | parent PID |
+| 25 | `sys_waitpid` | RDI=pid, RSI=status_ptr, RDX=options | child PID or -1 |
 
 ### IRQ Mapping (8259 PIC)
 

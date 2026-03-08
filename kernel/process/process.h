@@ -4,7 +4,7 @@
 #include "../common.h"
 
 #define MAX_PROCESSES   64
-#define PROCESS_STACK_SIZE 8192   /* 8KB per process kernel stack */
+#define PROCESS_STACK_SIZE 16384  /* 16KB per process kernel stack */
 #define PROCESS_MAX_FDS 32
 
 /* File descriptor types */
@@ -52,6 +52,7 @@ struct process {
     enum process_state state;
     struct context context;
     uint64_t kernel_stack;       /* Top of kernel stack */
+    uint64_t kernel_stack_guard; /* Guard page address (unmapped, 0 if none) */
     struct process *next;        /* For scheduler queue */
     uint64_t cr3;                /* Physical address of PML4, 0 = kernel CR3 */
     bool is_user;                /* true if ring 3 process */
