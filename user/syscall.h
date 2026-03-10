@@ -40,6 +40,13 @@ typedef uint64_t           size_t;
 #define SYS_SELECT      24
 #define SYS_WAITPID     25
 #define SYS_EXECV       26
+#define SYS_MMAP        27
+#define SYS_MUNMAP      28
+#define SYS_MPROTECT    29
+#define SYS_BRK         30
+#define SYS_EPOLL_CREATE  31
+#define SYS_EPOLL_CTL     32
+#define SYS_EPOLL_WAIT    33
 
 /* Open flags */
 #define O_CREAT         0x40
@@ -233,5 +240,106 @@ static inline int64_t sys_execv(const char *path, int64_t argc, char **argv) {
 
 /* User argv address (set by kernel before process starts) */
 #define USER_ARGV_ADDR  0x600000ULL
+
+/* mmap prot flags */
+#define PROT_NONE      0
+#define PROT_READ      1
+#define PROT_WRITE     2
+#define PROT_EXEC      4
+
+/* mmap flags */
+#define MAP_SHARED     1
+#define MAP_PRIVATE    2
+#define MAP_ANONYMOUS  0x20
+#define MAP_FIXED      0x10
+#define MAP_FAILED     ((void *)-1)
+
+struct mmap_args {
+    uint64_t addr;
+    uint64_t len;
+    uint32_t prot;
+    uint32_t flags;
+    int32_t  fd;
+    uint32_t pad;
+    uint64_t offset;
+};
+
+static inline void *sys_mmap(void *addr, uint64_t len, uint32_t prot,
+                              uint32_t flags, int32_t fd, uint64_t offset) {
+    struct mmap_args args;
+    args.addr   = (uint64_t)addr;
+    args.len    = len;
+    args.prot   = prot;
+    args.flags  = flags;
+    args.fd     = fd;
+    args.pad    = 0;
+    args.offset = offset;
+    return (void *)syscall1(SYS_MMAP, (uint64_t)&args);
+}
+
+static inline int64_t sys_munmap(void *addr, uint64_t len) {
+    return (int64_t)syscall2(SYS_MUNMAP, (uint64_t)addr, len);
+}
+
+static inline int64_t sys_mprotect(void *addr, uint64_t len, uint32_t prot) {
+    return (int64_t)syscall3(SYS_MPROTECT, (uint64_t)addr, len, (uint64_t)prot);
+}
+
+static inline uint64_t sys_brk(uint64_t new_brk) {
+    return syscall1(SYS_BRK, new_brk);
+}
+
+/* epoll constants */
+#define EPOLLIN   0x001
+#define EPOLLOUT  0x004
+#define EPOLLERR  0x008
+#define EPOLLHUP  0x010
+
+#define EPOLL_CTL_ADD  1
+#define EPOLL_CTL_MOD  2
+#define EPOLL_CTL_DEL  3
+
+struct epoll_event {
+    uint32_t events;
+    uint64_t data;
+} __attribute__((packed));
+
+struct epoll_ctl_args {
+    int32_t  op;
+    int32_t  fd;
+    uint32_t events;
+    uint32_t pad;
+    uint64_t data;
+};
+
+struct epoll_wait_args {
+    int32_t  maxevents;
+    int32_t  timeout_ms;
+    uint64_t events_ptr;
+};
+
+static inline int64_t sys_epoll_create(void) {
+    return (int64_t)syscall0(SYS_EPOLL_CREATE);
+}
+
+static inline int64_t sys_epoll_ctl(int epfd, int op, int fd,
+                                     uint32_t events, uint64_t data) {
+    struct epoll_ctl_args args;
+    args.op     = op;
+    args.fd     = fd;
+    args.events = events;
+    args.pad    = 0;
+    args.data   = data;
+    return (int64_t)syscall2(SYS_EPOLL_CTL, (uint64_t)epfd, (uint64_t)&args);
+}
+
+static inline int64_t sys_epoll_wait(int epfd, struct epoll_event *events,
+                                      int maxevents, int timeout_ms) {
+    struct epoll_wait_args args;
+    args.maxevents  = maxevents;
+    args.timeout_ms = timeout_ms;
+    args.events_ptr = (uint64_t)events;
+    return (int64_t)syscall2(SYS_EPOLL_WAIT, (uint64_t)epfd, (uint64_t)&args);
+}
 
 #endif /* USER_SYSCALL_H */

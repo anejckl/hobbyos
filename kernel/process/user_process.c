@@ -54,7 +54,7 @@ int user_process_create_args(const char *name, const uint8_t *data, uint64_t siz
     }
 
     /* 3. Load ELF segments (allocate, copy, and map pages) */
-    if (elf_load(pml4_phys, data, size, &elf_result) < 0) {
+    if (elf_load(pml4_phys, data, size, 0, &elf_result) < 0) {
         debug_printf("user_process: ELF load failed for '%s'\n", name);
         return -1;
     }
@@ -94,7 +94,7 @@ int user_process_create_args(const char *name, const uint8_t *data, uint64_t siz
     /* 6. Set up SysV stack layout (writes strings + pointers via PHYS_TO_VIRT) */
     uint64_t entry_rsp, entry_argv_ptr;
     if (elf_setup_stack(stack_phys, USER_STACK_BOTTOM, argc, kern_argv,
-                        &entry_rsp, &entry_argv_ptr) < 0) {
+                        &elf_result, &entry_rsp, &entry_argv_ptr) < 0) {
         debug_printf("user_process: elf_setup_stack failed for '%s'\n", name);
         return -1;
     }
@@ -137,6 +137,12 @@ int user_process_create_args(const char *name, const uint8_t *data, uint64_t siz
     proc->user_entry_rsp  = entry_rsp;
     proc->user_entry_argv = entry_argv_ptr;
     proc->user_entry_argc = argc;
+
+    /* Initialize mmap/brk/epoll fields */
+    proc->mmap_next    = MMAP_BASE;
+    proc->brk_start    = elf_result.load_end;
+    proc->brk_current  = elf_result.load_end;
+    proc->epoll_fd_idx = -1;
 
     /* 10. Add to scheduler */
     scheduler_add(proc);

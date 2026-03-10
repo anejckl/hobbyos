@@ -16,6 +16,8 @@ static const char *test_programs[] = {
     "net_test",
     "exec_test",
     "waitpid_test",
+    "mmap_test",
+    "epoll_test",
     NULL
 };
 

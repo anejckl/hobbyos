@@ -17,6 +17,15 @@ USER_CFLAGS = -ffreestanding -mno-red-zone -Wall -Wextra \
               -fno-stack-protector -fno-pic -nostdlib -nostdinc -Iuser -O2 -g \
               -mno-sse -mno-sse2 -mno-mmx -mno-avx
 
+# Shared object flags (PIC, freestanding, no libc)
+SO_CFLAGS = -fPIC -ffreestanding -mno-red-zone -Wall -Wextra \
+            -fno-stack-protector -nostdlib -nostdinc -Iuser -O2 -g \
+            -mno-sse -mno-sse2 -mno-mmx -mno-avx
+
+# libc shared library sources
+LIBC_SRCS = user/lib/libc.c user/lib/malloc.c user/lib/stdio.c \
+            user/lib/string.c user/lib/stdlib.c
+
 # Source files
 ASM_SRCS = boot/boot.asm \
            kernel/arch/x86_64/gdt_flush.asm \
@@ -74,7 +83,10 @@ C_SRCS = kernel/kernel.c \
          kernel/net/icmp.c \
          kernel/net/udp.c \
          kernel/net/tcp.c \
-         kernel/net/socket.c
+         kernel/net/socket.c \
+         kernel/memory/mmap.c \
+         kernel/fs/epoll.c \
+         kernel/fs/poll.c
 
 # Object files
 ASM_OBJS = $(ASM_SRCS:.asm=.o)
@@ -82,7 +94,7 @@ C_OBJS = $(C_SRCS:.c=.o)
 C_DEPS = $(C_OBJS:.o=.d)
 
 # User program embedded objects
-USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm net_test nc httpd ping exec_test waitpid_test argv_test fork_exec_test
+USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm net_test nc httpd ping exec_test waitpid_test argv_test fork_exec_test mmap_test epoll_test
 USER_EMBED_OBJS = $(patsubst %,user/%_embed.o,$(USER_PROGRAMS))
 
 OBJS = $(ASM_OBJS) $(C_OBJS) $(USER_EMBED_OBJS)
@@ -117,22 +129,40 @@ user/%.elf: user/%.o user/user.ld
 user/%_embed.o: user/%.elf
 	cd user && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 $*.elf $*_embed.o
 
+# --- Shared object build rules ---
+
+# ld.so: user-space dynamic linker (ET_DYN, base 0)
+user/ld.so: user/ld.so.c user/ldso.ld
+	$(CC) $(SO_CFLAGS) -Wl,-T,user/ldso.ld -o $@ user/ld.so.c
+
+# libc.so: minimal C standard library
+user/lib/libc.so: $(LIBC_SRCS) user/lib/libso.ld
+	$(CC) $(SO_CFLAGS) -Wl,-T,user/lib/libso.ld -Wl,-soname,libc.so \
+	      -shared -o $@ $(LIBC_SRCS)
+
+# crt0.o: C runtime startup for dynamically-linked programs
+user/lib/crt0.o: user/lib/crt0.asm
+	$(AS) $(ASFLAGS) $< -o $@
+
 iso: $(KERNEL_BIN)
 	mkdir -p $(ISO_DIR)/boot/grub
 	cp $(KERNEL_BIN) $(ISO_DIR)/boot/kernel.bin
 	cp grub.cfg $(ISO_DIR)/boot/grub/grub.cfg
 	grub-mkrescue -o $(ISO) $(ISO_DIR)
 
-# ext2 disk image with user programs
-disk.img: $(patsubst %,user/%.elf,$(USER_PROGRAMS))
+# ext2 disk image with user programs + shared libraries
+disk.img: $(patsubst %,user/%.elf,$(USER_PROGRAMS)) user/ld.so user/lib/libc.so
 	dd if=/dev/zero of=disk.img bs=1M count=16
 	mkfs.ext2 -F disk.img
 	mkdir -p /tmp/hobbyos_mnt
 	mount -o loop disk.img /tmp/hobbyos_mnt || true
 	mkdir -p /tmp/hobbyos_mnt/bin || true
+	mkdir -p /tmp/hobbyos_mnt/lib || true
 	for prog in $(USER_PROGRAMS); do \
 		cp user/$$prog.elf /tmp/hobbyos_mnt/bin/$$prog 2>/dev/null || true; \
 	done
+	cp user/ld.so     /tmp/hobbyos_mnt/lib/ld.so     2>/dev/null || true
+	cp user/lib/libc.so /tmp/hobbyos_mnt/lib/libc.so 2>/dev/null || true
 	umount /tmp/hobbyos_mnt 2>/dev/null || true
 	rm -rf /tmp/hobbyos_mnt
 
@@ -180,7 +210,8 @@ install-hooks:
 
 clean:
 	rm -f $(OBJS) $(C_DEPS) $(KERNEL_BIN) $(ISO) tests/run_tests tests/serial_output.log tests/interactive_serial.log tests/interactive_results.json
-	rm -f user/*.o user/*.elf user/*.bin
+	rm -f user/*.o user/*.elf user/*.bin user/*.so
+	rm -f user/lib/*.o user/lib/*.so
 	rm -f kernel/elf/*.o kernel/fs/*.o kernel/signal/*.o kernel/drivers/*.o kernel/net/*.o
 	find . -name '*.d' -delete 2>/dev/null || true
 	rm -rf $(ISO_DIR)

@@ -8,10 +8,13 @@
 #include "../memory/user_vm.h"
 #include "../memory/vmm.h"
 #include "../memory/kheap.h"
+#include "../memory/mmap.h"
 #include "../fs/vfs.h"
 #include "../fs/ramfs.h"
 #include "../fs/pipe.h"
 #include "../fs/ext2.h"
+#include "../fs/epoll.h"
+#include "../fs/poll.h"
 #include "../signal/signal.h"
 #include "../drivers/tty.h"
 #include "../drivers/device.h"
@@ -180,7 +183,7 @@ static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
 
     /* Load ELF segments into new address space */
     struct elf_load_result elf_result;
-    if (elf_load(new_cr3, prog_data, prog_size, &elf_result) < 0) {
+    if (elf_load(new_cr3, prog_data, prog_size, 0, &elf_result) < 0) {
         debug_printf("syscall: exec '%s' ELF load failed\n", name_buf);
         user_vm_destroy_address_space(new_cr3);
         frame->rax = (uint64_t)-1;
@@ -208,7 +211,7 @@ static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
     const char *exec_argv[1] = { name_buf };
     uint64_t entry_rsp, entry_argv_ptr;
     if (elf_setup_stack(stack_phys, USER_STACK_BOTTOM, 1, exec_argv,
-                        &entry_rsp, &entry_argv_ptr) < 0) {
+                        &elf_result, &entry_rsp, &entry_argv_ptr) < 0) {
         user_vm_destroy_address_space(new_cr3);
         frame->rax = (uint64_t)-1;
         return;
@@ -217,6 +220,7 @@ static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
     /* === Point of no return === */
 
     /* Destroy old address space and switch to new one */
+    vma_destroy_all(cur);
     uint64_t old_cr3 = cur->cr3;
     cur->cr3 = new_cr3;
     write_cr3(scheduler_get_kernel_cr3());
@@ -238,6 +242,11 @@ static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
     cur->name[sizeof(cur->name) - 1] = '\0';
     cur->user_program_data = prog_data;
     cur->user_program_size = prog_size;
+
+    /* Initialize brk for new image */
+    cur->mmap_next   = MMAP_BASE;
+    cur->brk_start   = elf_result.load_end;
+    cur->brk_current = elf_result.load_end;
 
     /* Set up interrupt frame to jump to new entry point */
     frame->rip = elf_result.entry_point;
@@ -357,7 +366,7 @@ static void syscall_execv(struct interrupt_frame *frame,
     }
 
     struct elf_load_result elf_result;
-    if (elf_load(new_cr3, prog_data, prog_size, &elf_result) < 0) {
+    if (elf_load(new_cr3, prog_data, prog_size, 0, &elf_result) < 0) {
         user_vm_destroy_address_space(new_cr3);
         frame->rax = (uint64_t)-1;
         return;
@@ -380,13 +389,14 @@ static void syscall_execv(struct interrupt_frame *frame,
 
     uint64_t entry_rsp, entry_argv_ptr;
     if (elf_setup_stack(stack_phys, USER_STACK_BOTTOM, argc, kern_argv,
-                        &entry_rsp, &entry_argv_ptr) < 0) {
+                        &elf_result, &entry_rsp, &entry_argv_ptr) < 0) {
         user_vm_destroy_address_space(new_cr3);
         frame->rax = (uint64_t)-1;
         return;
     }
 
     /* === Point of no return === */
+    vma_destroy_all(cur);
     uint64_t old_cr3 = cur->cr3;
     cur->cr3 = new_cr3;
     write_cr3(scheduler_get_kernel_cr3());
@@ -405,6 +415,11 @@ static void syscall_execv(struct interrupt_frame *frame,
     cur->name[sizeof(cur->name) - 1] = '\0';
     cur->user_program_data = prog_data;
     cur->user_program_size = prog_size;
+
+    /* Initialize brk for new image */
+    cur->mmap_next   = MMAP_BASE;
+    cur->brk_start   = elf_result.load_end;
+    cur->brk_current = elf_result.load_end;
 
     frame->rip = elf_result.entry_point;
     frame->rsp = entry_rsp;
@@ -490,6 +505,12 @@ static void syscall_fork(struct interrupt_frame *frame) {
     child->sig_pending = 0;
     child->in_signal_handler = false;
 
+    /* Copy VMA table and brk */
+    vma_fork_copy(parent, child);
+
+    /* Initialize epoll state */
+    child->epoll_fd_idx = -1;
+
     /* 9. Set context so scheduler jumps to fork_return_trampoline */
     memset(&child->context, 0, sizeof(struct context));
     child->context.rip = (uint64_t)fork_return_trampoline;
@@ -503,6 +524,240 @@ static void syscall_fork(struct interrupt_frame *frame) {
 
     /* 11. Parent returns child PID */
     frame->rax = (uint64_t)child->pid;
+}
+
+/* SYS_BRK (30): new_brk = 0 -> return current brk; else set new brk */
+__attribute__((noinline))
+static uint64_t syscall_brk(uint64_t new_brk) {
+    struct process *proc = scheduler_get_current();
+    if (!proc || !proc->is_user) return (uint64_t)-1;
+
+    if (new_brk == 0)
+        return proc->brk_current;
+
+    /* new_brk must be >= brk_start */
+    if (new_brk < proc->brk_start)
+        return proc->brk_current;
+
+    uint64_t old_end = (proc->brk_current + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+    uint64_t new_end = (new_brk + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+    /* Grow: map new pages */
+    for (uint64_t pg = old_end; pg < new_end; pg += PAGE_SIZE) {
+        uint64_t phys = pmm_alloc_page();
+        if (!phys) return proc->brk_current;
+        memset((void *)PHYS_TO_VIRT(phys), 0, PAGE_SIZE);
+        if (user_vm_map_page(proc->cr3, pg, phys,
+                             PTE_PRESENT | PTE_WRITABLE | PTE_USER) < 0) {
+            pmm_page_unref(phys);
+            return proc->brk_current;
+        }
+    }
+
+    proc->brk_current = new_brk;
+    return new_brk;
+}
+
+/* SYS_MMAP (27): arg1 = struct mmap_args* */
+__attribute__((noinline))
+static uint64_t syscall_mmap(uint64_t args_ptr) {
+    struct process *proc = scheduler_get_current();
+    if (!proc || !proc->is_user) return (uint64_t)-1;
+
+    if (args_ptr >= KERNEL_VMA) return (uint64_t)-1;
+
+    struct mmap_args args;
+    /* Copy from user space */
+    memcpy(&args, (void *)args_ptr, sizeof(args));
+
+    if (args.len == 0) return (uint64_t)-1;
+    uint64_t len = (args.len + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
+
+    uint64_t addr;
+    if ((args.flags & MAP_FIXED) && args.addr != 0) {
+        addr = args.addr & ~(PAGE_SIZE - 1);
+    } else {
+        addr = vma_find_free_range(proc, args.addr, len);
+        if (!addr) return (uint64_t)-1;
+    }
+
+    vma_t *vma = vma_alloc(proc);
+    if (!vma) return (uint64_t)-1;
+
+    vma->start = addr;
+    vma->end   = addr + len;
+    vma->prot  = args.prot;
+    vma->flags = args.flags;
+    vma->in_use = true;
+    vma->shared_phys = 0;
+
+    if (args.flags & MAP_ANONYMOUS) {
+        vma->type = VMA_ANON;
+        vma->file_inode = 0;
+        vma->file_offset = 0;
+    } else {
+        /* File-backed mmap */
+        vma->type = VMA_FILE;
+        vma->file_offset = args.offset;
+        /* Look up inode from fd */
+        if (args.fd < 0 || args.fd >= PROCESS_MAX_FDS) {
+            vma->in_use = false;
+            return (uint64_t)-1;
+        }
+        struct process_fd *pfd = &proc->fd_table[args.fd];
+        if (pfd->type == FD_EXT2) {
+            vma->file_inode = (uint32_t)(uint64_t)pfd->data;
+        } else {
+            vma->in_use = false;
+            return (uint64_t)-1;
+        }
+    }
+
+    /* Advance mmap_next hint */
+    if (addr + len > proc->mmap_next)
+        proc->mmap_next = addr + len;
+
+    debug_printf("mmap: PID=%u addr=0x%x len=0x%x prot=0x%x flags=0x%x\n",
+                 (uint64_t)proc->pid, addr, len, (uint64_t)args.prot, (uint64_t)args.flags);
+    return addr;
+}
+
+/* SYS_MUNMAP (28) */
+static uint64_t syscall_munmap(uint64_t addr, uint64_t len) {
+    struct process *proc = scheduler_get_current();
+    if (!proc || !proc->is_user) return (uint64_t)-1;
+    return (uint64_t)vma_unmap(proc, addr, len);
+}
+
+/* SYS_MPROTECT (29) */
+static uint64_t syscall_mprotect(uint64_t addr, uint64_t len, uint64_t prot) {
+    struct process *proc = scheduler_get_current();
+    if (!proc || !proc->is_user) return (uint64_t)-1;
+    return (uint64_t)vma_protect(proc, addr, len, (uint32_t)prot);
+}
+
+/* epoll_ctl args struct */
+struct epoll_ctl_args {
+    int32_t  op;
+    int32_t  fd;
+    uint32_t events;
+    uint32_t pad;
+    uint64_t data;
+};
+
+/* SYS_EPOLL_CREATE (31) */
+static uint64_t syscall_epoll_create(void) {
+    struct process *proc = scheduler_get_current();
+    if (!proc || !proc->is_user) return (uint64_t)-1;
+
+    int idx = epoll_create_instance(proc->pid);
+    if (idx < 0) return (uint64_t)-1;
+
+    int fd = process_fd_alloc(proc, 3);
+    if (fd < 0) {
+        epoll_destroy(idx);
+        return (uint64_t)-1;
+    }
+
+    proc->fd_table[fd].type   = FD_EPOLL;
+    proc->fd_table[fd].data   = (void *)(uint64_t)idx;
+    proc->fd_table[fd].offset = 0;
+    return (uint64_t)fd;
+}
+
+/* SYS_EPOLL_CTL (32): arg1=epfd, arg2=struct epoll_ctl_args* */
+__attribute__((noinline))
+static uint64_t syscall_epoll_ctl(uint64_t epfd, uint64_t args_ptr) {
+    struct process *proc = scheduler_get_current();
+    if (!proc || !proc->is_user) return (uint64_t)-1;
+    if (args_ptr >= KERNEL_VMA) return (uint64_t)-1;
+
+    if (epfd >= PROCESS_MAX_FDS || proc->fd_table[epfd].type != FD_EPOLL)
+        return (uint64_t)-1;
+
+    int epoll_idx = (int)(uint64_t)proc->fd_table[epfd].data;
+
+    struct epoll_ctl_args args;
+    memcpy(&args, (void *)args_ptr, sizeof(args));
+
+    return (uint64_t)epoll_ctl_instance(epoll_idx, args.op, args.fd,
+                                         args.events, args.data);
+}
+
+/* epoll_wait args struct */
+struct epoll_wait_args {
+    int32_t  maxevents;
+    int32_t  timeout_ms;
+    uint64_t events_ptr;  /* user-space struct epoll_event[] */
+};
+
+/* SYS_EPOLL_WAIT (33): arg1=epfd, arg2=struct epoll_wait_args* */
+__attribute__((noinline))
+static uint64_t syscall_epoll_wait(uint64_t epfd, uint64_t args_ptr) {
+    struct process *proc = scheduler_get_current();
+    if (!proc || !proc->is_user) return (uint64_t)-1;
+    if (args_ptr >= KERNEL_VMA) return (uint64_t)-1;
+
+    if (epfd >= PROCESS_MAX_FDS || proc->fd_table[epfd].type != FD_EPOLL)
+        return (uint64_t)-1;
+
+    int epoll_idx = (int)(uint64_t)proc->fd_table[epfd].data;
+    struct epoll_instance *ep = epoll_get(epoll_idx);
+    if (!ep) return (uint64_t)-1;
+
+    struct epoll_wait_args args;
+    memcpy(&args, (void *)args_ptr, sizeof(args));
+
+    if (args.maxevents <= 0) return (uint64_t)-1;
+    if (args.events_ptr >= KERNEL_VMA) return (uint64_t)-1;
+
+    struct epoll_event *user_events = (struct epoll_event *)args.events_ptr;
+
+    /* Quick poll: return immediately if any fd is ready */
+    int found = 0;
+    for (int j = 0; j < ep->watch_count && found < args.maxevents; j++) {
+        int wfd = ep->watches[j].fd;
+        uint32_t wev = ep->watches[j].events;
+        uint32_t ready = 0;
+        if ((wev & EPOLLIN) && fd_is_readable(proc, wfd))   ready |= EPOLLIN;
+        if ((wev & EPOLLOUT) && fd_is_writable(proc, wfd))  ready |= EPOLLOUT;
+        if (ready) {
+            user_events[found].events = ready;
+            user_events[found].data   = ep->watches[j].data;
+            found++;
+        }
+    }
+    if (found > 0 || args.timeout_ms == 0)
+        return (uint64_t)found;
+
+    /* Block until scheduler_tick wakes us (timeout or fd readiness).
+     * INT 0x80 is an interrupt gate (IF=0), so no race between setup and block. */
+    uint64_t timeout_ticks = (args.timeout_ms < 0)
+        ? (uint64_t)-1
+        : (uint64_t)((uint32_t)args.timeout_ms / 10 + 1);
+
+    proc->epoll_fd_idx        = epoll_idx;
+    proc->epoll_timeout_ticks = timeout_ticks;
+    proc->state               = PROCESS_BLOCKED;
+    schedule();
+    sti();
+
+    /* Resumed by scheduler_tick: re-scan for ready fds */
+    proc->epoll_fd_idx = -1;
+    found = 0;
+    for (int j = 0; j < ep->watch_count && found < args.maxevents; j++) {
+        int wfd = ep->watches[j].fd;
+        uint32_t wev = ep->watches[j].events;
+        uint32_t ready = 0;
+        if ((wev & EPOLLIN) && fd_is_readable(proc, wfd))   ready |= EPOLLIN;
+        if ((wev & EPOLLOUT) && fd_is_writable(proc, wfd))  ready |= EPOLLOUT;
+        if (ready) {
+            user_events[found].events = ready;
+            user_events[found].data   = ep->watches[j].data;
+            found++;
+        }
+    }
+    return (uint64_t)found;
 }
 
 /* Syscall handler for INT 0x80 */
@@ -864,6 +1119,8 @@ static void syscall_handler(struct interrupt_frame *frame) {
             pipe_close_write((struct pipe *)cur->fd_table[fd].data);
         else if (fdtype == FD_SOCKET)
             socket_close((int)(uint64_t)cur->fd_table[fd].data);
+        else if (fdtype == FD_EPOLL)
+            epoll_destroy((int)(uint64_t)cur->fd_table[fd].data);
 
         cur->fd_table[fd].type = FD_NONE;
         cur->fd_table[fd].data = NULL;
@@ -1562,6 +1819,34 @@ static void syscall_handler(struct interrupt_frame *frame) {
 
     case 26: /* SYS_EXECV */
         syscall_execv(frame, arg1, arg2, arg3);
+        return;
+
+    case SYS_MMAP:
+        frame->rax = syscall_mmap(arg1);
+        return;
+
+    case SYS_MUNMAP:
+        frame->rax = syscall_munmap(arg1, arg2);
+        return;
+
+    case SYS_MPROTECT:
+        frame->rax = syscall_mprotect(arg1, arg2, arg3);
+        return;
+
+    case SYS_BRK:
+        frame->rax = syscall_brk(arg1);
+        return;
+
+    case SYS_EPOLL_CREATE:
+        frame->rax = syscall_epoll_create();
+        return;
+
+    case SYS_EPOLL_CTL:
+        frame->rax = syscall_epoll_ctl(arg1, arg2);
+        return;
+
+    case SYS_EPOLL_WAIT:
+        frame->rax = syscall_epoll_wait(arg1, arg2);
         return;
 
     default:

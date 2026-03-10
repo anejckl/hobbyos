@@ -3,6 +3,7 @@
 #include "../arch/x86_64/pic.h"
 #include "../drivers/vga.h"
 #include "../memory/user_vm.h"
+#include "../memory/mmap.h"
 #include "../scheduler/scheduler.h"
 #include "../process/process.h"
 #include "../signal/signal.h"
@@ -96,6 +97,16 @@ static void page_fault_handler(struct interrupt_frame *frame) {
         if (cur && cur->cr3) {
             if (cow_handle_fault(cur->cr3, cr2) == 0)
                 return;  /* COW handled successfully */
+        }
+    }
+
+    /* mmap fault: lazy page allocation for VMA regions */
+    if (!(err & 0x1) && cr2 >= MMAP_BASE && cr2 < MMAP_TOP) {
+        struct process *cur = scheduler_get_current();
+        if (cur && cur->is_user && cur->cr3) {
+            bool is_write = (err & 0x2) != 0;
+            if (vma_handle_fault(cur, cr2, is_write) == 0)
+                return;
         }
     }
 

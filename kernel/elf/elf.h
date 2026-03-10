@@ -27,6 +27,7 @@
 
 /* e_type values */
 #define ET_EXEC     2  /* Executable */
+#define ET_DYN      3  /* Shared object */
 
 /* e_machine values */
 #define EM_X86_64   62
@@ -37,6 +38,9 @@
 /* Program header types */
 #define PT_NULL     0
 #define PT_LOAD     1
+#define PT_DYNAMIC  2  /* Dynamic linking info */
+#define PT_INTERP   3  /* Interpreter path */
+#define PT_PHDR     6  /* Program header table */
 
 /* Program header flags */
 #define PF_X        0x1  /* Execute */
@@ -60,6 +64,63 @@ typedef struct {
     uint16_t e_shnum;
     uint16_t e_shstrndx;
 } __attribute__((packed)) Elf64_Ehdr;
+
+/* Dynamic section tags */
+#define DT_NULL     0
+#define DT_NEEDED   1
+#define DT_PLTRELSZ 2
+#define DT_STRTAB   5
+#define DT_SYMTAB   6
+#define DT_RELA     7
+#define DT_RELASZ   8
+#define DT_RELAENT  9
+#define DT_SONAME   14
+#define DT_RPATH    15
+#define DT_PLTREL   20
+#define DT_JMPREL   23
+
+/* Relocation types */
+#define R_X86_64_NONE       0
+#define R_X86_64_64         1
+#define R_X86_64_GLOB_DAT   6
+#define R_X86_64_JUMP_SLOT  7
+#define R_X86_64_RELATIVE   8
+
+/* Auxiliary vector types */
+#define AT_NULL     0
+#define AT_PHDR     3
+#define AT_PHENT    4
+#define AT_PHNUM    5
+#define AT_PAGESZ   6
+#define AT_BASE     7
+#define AT_FLAGS    8
+#define AT_ENTRY    9
+
+/* ELF64 dynamic section entry */
+typedef struct {
+    int64_t  d_tag;
+    uint64_t d_val;
+} __attribute__((packed)) Elf64_Dyn;
+
+/* ELF64 symbol table entry */
+typedef struct {
+    uint32_t st_name;
+    uint8_t  st_info;
+    uint8_t  st_other;
+    uint16_t st_shndx;
+    uint64_t st_value;
+    uint64_t st_size;
+} __attribute__((packed)) Elf64_Sym;
+
+/* ELF64 relocation with addend */
+typedef struct {
+    uint64_t r_offset;
+    uint64_t r_info;
+    int64_t  r_addend;
+} __attribute__((packed)) Elf64_Rela;
+
+#define ELF64_R_TYPE(info)  ((uint32_t)(info))
+#define ELF64_R_SYM(info)   ((uint32_t)((info) >> 32))
 
 /* ELF64 program header */
 typedef struct {

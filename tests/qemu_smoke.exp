@@ -59,4 +59,19 @@ AUTOTEST: exec_test exited with status 0
 AUTOTEST: running waitpid_test
 waitpid_test: PASS
 AUTOTEST: waitpid_test exited with status 0
+# mmap test
+AUTOTEST: running mmap_test
+PASS: anon mmap write/read
+PASS: munmap
+PASS: MAP_PRIVATE fork isolation
+PASS: brk heap extend
+AUTOTEST: mmap_test exited with status 0
+# epoll test
+AUTOTEST: running epoll_test
+PASS: epoll_wait zero-timeout returns 0
+PASS: epoll EPOLLIN on pipe
+PASS: epoll_ctl DEL
+PASS: epoll_wait after DEL returns 0
+PASS: epoll_wait timeout returns 0
+AUTOTEST: epoll_test exited with status 0
 AUTOTEST: all tests passed

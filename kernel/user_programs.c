@@ -47,6 +47,10 @@ extern const uint8_t _binary_argv_test_elf_start[];
 extern const uint8_t _binary_argv_test_elf_end[];
 extern const uint8_t _binary_fork_exec_test_elf_start[];
 extern const uint8_t _binary_fork_exec_test_elf_end[];
+extern const uint8_t _binary_mmap_test_elf_start[];
+extern const uint8_t _binary_mmap_test_elf_end[];
+extern const uint8_t _binary_epoll_test_elf_start[];
+extern const uint8_t _binary_epoll_test_elf_end[];
 
 static const struct user_program programs[] = {
     {
@@ -159,6 +163,16 @@ static const struct user_program programs[] = {
         .data = _binary_fork_exec_test_elf_start,
         .size = 0
     },
+    {
+        .name = "mmap_test",
+        .data = _binary_mmap_test_elf_start,
+        .size = 0
+    },
+    {
+        .name = "epoll_test",
+        .data = _binary_epoll_test_elf_start,
+        .size = 0
+    },
     { NULL, NULL, 0 }
 };
 
@@ -207,6 +221,10 @@ static uint64_t program_size(const uint8_t *data) {
         return (uint64_t)(_binary_argv_test_elf_end - _binary_argv_test_elf_start);
     if (data == _binary_fork_exec_test_elf_start)
         return (uint64_t)(_binary_fork_exec_test_elf_end - _binary_fork_exec_test_elf_start);
+    if (data == _binary_mmap_test_elf_start)
+        return (uint64_t)(_binary_mmap_test_elf_end - _binary_mmap_test_elf_start);
+    if (data == _binary_epoll_test_elf_start)
+        return (uint64_t)(_binary_epoll_test_elf_end - _binary_epoll_test_elf_start);
     return 0;
 }
 

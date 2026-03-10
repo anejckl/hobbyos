@@ -2,6 +2,7 @@
 #define PROCESS_H
 
 #include "../common.h"
+#include "../memory/mmap.h"
 
 #define MAX_PROCESSES   64
 #define PROCESS_STACK_SIZE 16384  /* 16KB per process kernel stack */
@@ -16,6 +17,7 @@
 #define FD_DEVICE       5   /* device files in /dev */
 #define FD_EXT2         6   /* ext2 filesystem files/dirs */
 #define FD_SOCKET       7   /* network socket */
+#define FD_EPOLL        8   /* epoll instance */
 
 struct process_fd {
     int type;           /* FD_NONE, FD_VFS, FD_PIPE_READ, FD_PIPE_WRITE, FD_CONSOLE, FD_DEVICE, FD_EXT2 */
@@ -81,6 +83,18 @@ struct process {
     uint64_t sig_saved_rsi;      /* saved RSI */
     uint64_t sig_saved_rdx;      /* saved RDX */
     bool in_signal_handler;      /* true while delivering a signal */
+
+    /* Memory-mapped regions (Phase 11) */
+    vma_t    vmas[VMA_MAX];
+    uint64_t mmap_next;     /* next free address in mmap region */
+    uint64_t brk_start;     /* first addr after ELF load */
+    uint64_t brk_current;   /* current brk */
+
+    /* epoll blocking (Phase 13) */
+    int      epoll_fd_idx;          /* epoll instance index, -1 = not blocked */
+    uint64_t epoll_timeout_ticks;   /* (uint64_t)-1 = infinite */
+    void    *epoll_events_ptr;      /* user-space events array */
+    int      epoll_maxevents;
 };
 
 void process_init(void);

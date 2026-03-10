@@ -3,6 +3,8 @@
 #include "../memory/pmm.h"
 #include "../memory/vmm.h"
 #include "../memory/user_vm.h"
+#include "../fs/ext2.h"
+#include "../memory/kheap.h"
 #include "../string.h"
 #include "../debug/debug.h"
 
@@ -27,8 +29,8 @@ int elf_validate(const uint8_t *data, uint64_t size) {
     if (ehdr->e_ident[EI_VERSION] != EV_CURRENT)
         return -1;
 
-    /* Check type and machine */
-    if (ehdr->e_type != ET_EXEC)
+    /* Accept ET_EXEC or ET_DYN */
+    if (ehdr->e_type != ET_EXEC && ehdr->e_type != ET_DYN)
         return -1;
     if (ehdr->e_machine != EM_X86_64)
         return -1;
@@ -42,17 +44,14 @@ int elf_validate(const uint8_t *data, uint64_t size) {
     return 0;
 }
 
-int elf_load(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
-             struct elf_load_result *result) {
-    if (elf_validate(data, size) < 0) {
-        debug_printf("elf_load: validation failed\n");
-        return -1;
-    }
-
+/* Load PT_LOAD segments from an ELF into the given address space.
+ * base_addr is added to all virtual addresses (0 for ET_EXEC, LDSO_BASE for ld.so).
+ * Updates result->load_end with the highest loaded page end. */
+static int elf_load_segments(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
+                              uint64_t base_addr, uint64_t *load_end_out) {
     const Elf64_Ehdr *ehdr = (const Elf64_Ehdr *)data;
-    result->entry_point = ehdr->e_entry;
+    uint64_t load_end = 0;
 
-    /* Iterate program headers */
     for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
         const Elf64_Phdr *phdr = (const Elf64_Phdr *)
             (data + ehdr->e_phoff + i * ehdr->e_phentsize);
@@ -72,9 +71,13 @@ int elf_load(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
         if (phdr->p_flags & PF_W)   flags |= PTE_WRITABLE;
         if (!(phdr->p_flags & PF_X)) flags |= PTE_NX;
 
-        uint64_t seg_start = phdr->p_vaddr & ~(PAGE_SIZE - 1);
-        uint64_t seg_end = (phdr->p_vaddr + phdr->p_memsz + PAGE_SIZE - 1) &
+        uint64_t vaddr = phdr->p_vaddr + base_addr;
+        uint64_t seg_start = vaddr & ~(PAGE_SIZE - 1);
+        uint64_t seg_end = (vaddr + phdr->p_memsz + PAGE_SIZE - 1) &
                            ~(PAGE_SIZE - 1);
+
+        if (seg_end > load_end)
+            load_end = seg_end;
 
         for (uint64_t addr = seg_start; addr < seg_end; addr += PAGE_SIZE) {
             uint64_t phys = pmm_alloc_page();
@@ -86,12 +89,12 @@ int elf_load(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
             memset(kpage, 0, PAGE_SIZE);
 
             /* Copy file bytes that overlap this page */
-            uint64_t seg_file_end = phdr->p_vaddr + phdr->p_filesz;
-            uint64_t copy_start = phdr->p_vaddr > addr ? phdr->p_vaddr : addr;
-            uint64_t copy_end   = seg_file_end  < addr + PAGE_SIZE ? seg_file_end : addr + PAGE_SIZE;
+            uint64_t seg_file_end = vaddr + phdr->p_filesz;
+            uint64_t copy_start = vaddr > addr ? vaddr : addr;
+            uint64_t copy_end   = seg_file_end < addr + PAGE_SIZE ? seg_file_end : addr + PAGE_SIZE;
             if (copy_start < copy_end) {
                 uint64_t dst_off = copy_start - addr;
-                uint64_t src_off = phdr->p_offset + (copy_start - phdr->p_vaddr);
+                uint64_t src_off = phdr->p_offset + (copy_start - vaddr);
                 memcpy(kpage + dst_off, data + src_off, copy_end - copy_start);
             }
 
@@ -102,11 +105,98 @@ int elf_load(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
         }
 
         debug_printf("elf_load: segment %u vaddr=0x%x filesz=%u memsz=%u flags=0x%x\n",
-                     (uint64_t)i, phdr->p_vaddr, phdr->p_filesz,
+                     (uint64_t)i, vaddr, phdr->p_filesz,
                      phdr->p_memsz, (uint64_t)phdr->p_flags);
     }
 
-    debug_printf("elf_load: entry=0x%x\n", result->entry_point);
+    *load_end_out = load_end;
+    return 0;
+}
+
+int elf_load(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
+             uint64_t base_addr, struct elf_load_result *result) {
+    if (elf_validate(data, size) < 0) {
+        debug_printf("elf_load: validation failed\n");
+        return -1;
+    }
+
+    const Elf64_Ehdr *ehdr = (const Elf64_Ehdr *)data;
+
+    /* Fill in main binary info */
+    result->at_entry    = ehdr->e_entry + base_addr;
+    result->at_phdr     = ehdr->e_phoff + base_addr;
+    result->at_phent    = ehdr->e_phentsize;
+    result->at_phnum    = ehdr->e_phnum;
+    result->at_base     = 0;
+    result->load_end    = 0;
+
+    /* Default entry is main binary entry */
+    result->entry_point = ehdr->e_entry + base_addr;
+
+    /* Load PT_LOAD segments */
+    uint64_t load_end = 0;
+    if (elf_load_segments(pml4_phys, data, size, base_addr, &load_end) < 0)
+        return -1;
+    result->load_end = load_end;
+
+    /* Scan for PT_INTERP — if present, load ld.so */
+    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
+        const Elf64_Phdr *phdr = (const Elf64_Phdr *)
+            (data + ehdr->e_phoff + i * ehdr->e_phentsize);
+
+        if (phdr->p_type == PT_INTERP) {
+            /* Read interpreter path from the file */
+            if (phdr->p_offset + phdr->p_filesz > size)
+                break;
+            /* Typically "/lib/ld.so" */
+            const char *interp = (const char *)(data + phdr->p_offset);
+            debug_printf("elf_load: PT_INTERP = %s\n", interp);
+
+            /* Try to load ld.so from ext2 */
+            if (!ext2_is_mounted())
+                break;
+
+            uint32_t ino = ext2_path_lookup(interp);
+            if (!ino) {
+                debug_printf("elf_load: ld.so not found at %s\n", interp);
+                break;
+            }
+
+            struct ext2_inode ldso_inode;
+            if (ext2_read_inode(ino, &ldso_inode) != 0 || ldso_inode.i_size == 0)
+                break;
+
+            uint8_t *ldso_buf = (uint8_t *)kmalloc(ldso_inode.i_size);
+            if (!ldso_buf)
+                break;
+
+            int bytes = ext2_read_file(&ldso_inode, 0, ldso_inode.i_size, ldso_buf);
+            if (bytes <= 0)
+                break;
+
+            /* Validate ld.so ELF */
+            if (elf_validate(ldso_buf, (uint64_t)bytes) < 0) {
+                debug_printf("elf_load: ld.so invalid ELF\n");
+                break;
+            }
+
+            const Elf64_Ehdr *ldso_ehdr = (const Elf64_Ehdr *)ldso_buf;
+
+            /* Load ld.so at LDSO_BASE */
+            uint64_t ldso_load_end = 0;
+            if (elf_load_segments(pml4_phys, ldso_buf, (uint64_t)bytes,
+                                  LDSO_BASE, &ldso_load_end) == 0) {
+                result->at_base     = LDSO_BASE;
+                result->entry_point = ldso_ehdr->e_entry + LDSO_BASE;
+                debug_printf("elf_load: ld.so loaded at 0x%x entry=0x%x\n",
+                             (uint64_t)LDSO_BASE, result->entry_point);
+            }
+            break;
+        }
+    }
+
+    debug_printf("elf_load: entry=0x%x load_end=0x%x\n",
+                 result->entry_point, result->load_end);
     return 0;
 }
 
@@ -114,11 +204,13 @@ int elf_load(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
  * stack_phys     - physical address of the 4 KB stack page
  * stack_base_virt - user virtual address at which the page is mapped
  * argc / argv    - program arguments (argv[0] = program name)
+ * result         - if non-NULL, auxv entries appended after envp NULL
  * rsp_out        - set to user RSP (points to argc value on stack)
  * argv_ptr_out   - set to user virtual address of argv[0] pointer
  * Returns 0 on success, -1 if arguments don't fit in one page. */
 int elf_setup_stack(uint64_t stack_phys, uint64_t stack_base_virt,
                     int argc, const char **argv,
+                    const struct elf_load_result *result,
                     uint64_t *rsp_out, uint64_t *argv_ptr_out) {
 #define ELF_MAX_ARGS    32
 #define ELF_MAX_ARG_LEN 256
@@ -145,8 +237,15 @@ int elf_setup_stack(uint64_t stack_phys, uint64_t stack_base_virt,
         argv_ptrs[i] = stack_base_virt + (uint64_t)write_pos;
     }
 
-    /* Block: [argc][argv[0]..argv[argc-1]][NULL][NULL(envp)] */
-    int block_size = (argc + 3) * 8;
+    /* Determine auxv count */
+    int auxv_count = 0;
+    if (result) {
+        /* AT_PHDR, AT_PHENT, AT_PHNUM, AT_PAGESZ, AT_BASE, AT_FLAGS, AT_ENTRY, AT_NULL */
+        auxv_count = 8;
+    }
+
+    /* Block: [argc][argv[0]..argv[argc-1]][NULL][NULL(envp)][auxv pairs...][AT_NULL] */
+    int block_size = (argc + 3 + auxv_count * 2) * 8;
     if (write_pos < block_size)
         return -1;
 
@@ -161,7 +260,19 @@ int elf_setup_stack(uint64_t stack_phys, uint64_t stack_base_virt,
     for (int i = 0; i < argc; i++)
         *p++ = argv_ptrs[i];
     *p++ = 0;  /* argv[argc] = NULL */
-    *p   = 0;  /* envp[0]   = NULL */
+    *p++ = 0;  /* envp[0]   = NULL */
+
+    /* Append auxv if result provided */
+    if (result) {
+        *p++ = AT_PHDR;  *p++ = result->at_phdr;
+        *p++ = AT_PHENT; *p++ = (uint64_t)result->at_phent;
+        *p++ = AT_PHNUM; *p++ = (uint64_t)result->at_phnum;
+        *p++ = AT_PAGESZ; *p++ = PAGE_SIZE;
+        *p++ = AT_BASE;  *p++ = result->at_base;
+        *p++ = AT_FLAGS; *p++ = 0;
+        *p++ = AT_ENTRY; *p++ = result->at_entry;
+        *p++ = AT_NULL;  *p++ = 0;
+    }
 
     *rsp_out      = stack_base_virt + (uint64_t)start;
     *argv_ptr_out = stack_base_virt + (uint64_t)start + 8;

@@ -3,6 +3,8 @@
 #include "../arch/x86_64/tss.h"
 #include "../debug/debug.h"
 #include "../net/net.h"
+#include "../fs/epoll.h"
+#include "../fs/poll.h"
 
 static struct process *current_process = NULL;
 static struct process *ready_queue_head = NULL;
@@ -55,6 +57,50 @@ void scheduler_tick(void) {
 
     /* Network timer (every tick = 10ms at 100Hz) */
     net_tick();
+
+    /* Check blocked epoll processes */
+    {
+        struct process *table = process_table_get();
+        for (int i = 0; i < MAX_PROCESSES; i++) {
+            if (table[i].state != PROCESS_BLOCKED || table[i].epoll_fd_idx == -1)
+                continue;
+
+            /* Decrement timeout if finite */
+            if (table[i].epoll_timeout_ticks != (uint64_t)-1) {
+                if (table[i].epoll_timeout_ticks > 0)
+                    table[i].epoll_timeout_ticks--;
+            }
+
+            bool should_wake = false;
+
+            if (table[i].epoll_timeout_ticks == 0)
+                should_wake = true;
+
+            if (!should_wake) {
+                struct epoll_instance *ep = epoll_get(table[i].epoll_fd_idx);
+                if (ep) {
+                    for (int j = 0; j < ep->watch_count; j++) {
+                        int fd = ep->watches[j].fd;
+                        uint32_t ev = ep->watches[j].events;
+                        if ((ev & EPOLLIN) && fd_is_readable(&table[i], fd)) {
+                            should_wake = true;
+                            break;
+                        }
+                        if ((ev & EPOLLOUT) && fd_is_writable(&table[i], fd)) {
+                            should_wake = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (should_wake) {
+                table[i].epoll_fd_idx = -1;
+                table[i].state = PROCESS_READY;
+                scheduler_add(&table[i]);
+            }
+        }
+    }
 
     /* Schedule every 10 ticks (~100ms at 100Hz) */
     if (tick_count % 10 == 0)

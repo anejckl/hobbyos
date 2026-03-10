@@ -56,6 +56,18 @@ struct process *process_create(const char *name, void (*entry)(void)) {
     memset(proc->sig_handlers, 0, sizeof(proc->sig_handlers));
     proc->in_signal_handler = false;
 
+    /* Initialize mmap/brk fields */
+    memset(proc->vmas, 0, sizeof(proc->vmas));
+    proc->mmap_next   = MMAP_BASE;
+    proc->brk_start   = 0;
+    proc->brk_current = 0;
+
+    /* Initialize epoll state */
+    proc->epoll_fd_idx      = -1;
+    proc->epoll_timeout_ticks = 0;
+    proc->epoll_events_ptr  = NULL;
+    proc->epoll_maxevents   = 0;
+
     /* Set up initial context so context_switch will "return" to entry */
     memset(&proc->context, 0, sizeof(struct context));
     proc->context.rip = (uint64_t)entry;
@@ -113,6 +125,9 @@ struct process *process_alloc(void) {
         if (process_table[i].state == PROCESS_UNUSED) {
             memset(&process_table[i], 0, sizeof(struct process));
             process_table[i].pid = next_pid++;
+            /* epoll_fd_idx = -1 means not blocked on epoll */
+            process_table[i].epoll_fd_idx = -1;
+            process_table[i].mmap_next = MMAP_BASE;
             return &process_table[i];
         }
     }

@@ -30,6 +30,14 @@
 #define SYS_CONNECT     23
 #define SYS_SELECT      24
 #define SYS_WAITPID     25
+/* SYS_EXECV = 26 (defined in syscall.c as case 26) */
+#define SYS_MMAP        27
+#define SYS_MUNMAP      28
+#define SYS_MPROTECT    29
+#define SYS_BRK         30
+#define SYS_EPOLL_CREATE  31
+#define SYS_EPOLL_CTL     32
+#define SYS_EPOLL_WAIT    33
 
 void syscall_init(void);
 
