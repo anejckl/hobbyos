@@ -39,6 +39,7 @@ typedef uint64_t           size_t;
 #define SYS_CONNECT     23
 #define SYS_SELECT      24
 #define SYS_WAITPID     25
+#define SYS_EXECV       26
 
 /* Open flags */
 #define O_CREAT         0x40
@@ -224,6 +225,10 @@ static inline int64_t sys_select(int nfds, struct select_args *args) {
 
 static inline int64_t sys_waitpid(int32_t pid, int32_t *status, uint32_t options) {
     return (int64_t)syscall3(SYS_WAITPID, (uint64_t)pid, (uint64_t)status, (uint64_t)options);
+}
+
+static inline int64_t sys_execv(const char *path, int64_t argc, char **argv) {
+    return (int64_t)syscall3(SYS_EXECV, (uint64_t)path, (uint64_t)argc, (uint64_t)argv);
 }
 
 /* User argv address (set by kernel before process starts) */

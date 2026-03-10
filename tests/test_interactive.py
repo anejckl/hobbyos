@@ -190,7 +190,7 @@ class QEMUSession:
 
 
 def run_tests():
-    """Run all 20 interactive tests."""
+    """Run all 23 interactive tests."""
     overall_start = time.time()
     results = []
 
@@ -397,18 +397,26 @@ def run_tests():
         interactive_test("run_exec_test", "run exec_test",
                          "exec_test: PASS - fork/exec/wait works!", post_delay=3.0)
 
-        # --- Test 19: kernel alive ---
+        # --- Test 19: argv_test ---
+        interactive_test("run_argv_test", "run argv_test test1 test2",
+                         "argv_test: PASS", post_delay=2.0)
+
+        # --- Test 20: fork_exec_test ---
+        interactive_test("run_fork_exec_test", "run fork_exec_test",
+                         "fork_exec_test: PASS", post_delay=4.0)
+
+        # --- Test 21: kernel alive ---
         interactive_test("kernel_alive", "mem", "shell> mem")
 
-        # --- Test 20: ifconfig ---
+        # --- Test 22: ifconfig ---
         interactive_test("ifconfig", "ifconfig", "10.0.2.15")
 
-        # --- Test 21: ping gateway ---
+        # --- Test 23: ping gateway ---
         interactive_test("ping_gateway", "ping 10.0.2.2", "Reply from", post_delay=5.0)
 
     except RuntimeError as e:
         # Boot failure — fill remaining tests as failed
-        while len(results) < 21:
+        while len(results) < 23:
             results.append({
                 "name": "skipped",
                 "passed": False,

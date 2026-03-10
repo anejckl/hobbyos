@@ -13,4 +13,13 @@
 extern void enter_usermode(uint64_t entry, uint64_t user_stack,
                            uint64_t cs, uint64_t ss);
 
+/* Like enter_usermode, but also sets RDI and RSI in the user-mode context.
+ * user_rdi - value for RDI (e.g. argc)
+ * user_rsi - value for RSI (e.g. user-space argv pointer)
+ *
+ * This function never returns. */
+extern void enter_usermode_args(uint64_t entry, uint64_t user_stack,
+                                uint64_t cs, uint64_t ss,
+                                uint64_t user_rdi, uint64_t user_rsi);
+
 #endif /* USERMODE_H */

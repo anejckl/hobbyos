@@ -65,6 +65,11 @@ struct process {
     /* Per-process file descriptor table */
     struct process_fd fd_table[PROCESS_MAX_FDS];
 
+    /* First user-mode entry state (set by user_process_create_args / syscall_execv) */
+    uint64_t user_entry_rsp;     /* RSP for first entry to user mode */
+    uint64_t user_entry_argv;    /* user-space argv[] pointer */
+    int      user_entry_argc;    /* argc for first entry */
+
     /* Signal support */
     uint32_t sig_pending;        /* bitmask of pending signals */
     uint64_t sig_handlers[32];   /* per-signal handler addresses (0=SIG_DFL, 1=SIG_IGN) */

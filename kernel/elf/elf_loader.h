@@ -23,4 +23,15 @@ int elf_validate(const uint8_t *data, uint64_t size);
 int elf_load(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
              struct elf_load_result *result);
 
+/* Set up SysV AMD64 ABI argc/argv stack layout in a physical stack page.
+ * stack_phys      - physical address of the 4 KB stack page
+ * stack_base_virt - user virtual address at which the page is mapped
+ * argc / argv     - program arguments (argv[0] = program name)
+ * rsp_out         - set to user RSP (points to argc on stack, 16-byte aligned)
+ * argv_ptr_out    - set to user virtual address of argv[0] pointer
+ * Returns 0 on success, -1 if arguments don't fit. */
+int elf_setup_stack(uint64_t stack_phys, uint64_t stack_base_virt,
+                    int argc, const char **argv,
+                    uint64_t *rsp_out, uint64_t *argv_ptr_out);
+
 #endif /* ELF_LOADER_H */

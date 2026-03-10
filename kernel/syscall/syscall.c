@@ -204,33 +204,26 @@ static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
         return;
     }
 
+    /* Set up argv stack before destroying old address space */
+    const char *exec_argv[1] = { name_buf };
+    uint64_t entry_rsp, entry_argv_ptr;
+    if (elf_setup_stack(stack_phys, USER_STACK_BOTTOM, 1, exec_argv,
+                        &entry_rsp, &entry_argv_ptr) < 0) {
+        user_vm_destroy_address_space(new_cr3);
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
     /* === Point of no return === */
 
-    /* Destroy old address space */
+    /* Destroy old address space and switch to new one */
     uint64_t old_cr3 = cur->cr3;
     cur->cr3 = new_cr3;
     write_cr3(scheduler_get_kernel_cr3());
     if (old_cr3)
         user_vm_destroy_address_space(old_cr3);
 
-    /* Switch to new address space */
     write_cr3(new_cr3);
-
-    /* Copy ELF segment data into mapped user pages.
-     * prog_data is in kernel .rodata (PML4[511]) or kmalloc (PML4[256]),
-     * so it remains accessible after CR3 switch. */
-    const Elf64_Ehdr *ehdr = (const Elf64_Ehdr *)prog_data;
-    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
-        const Elf64_Phdr *phdr = (const Elf64_Phdr *)
-            (prog_data + ehdr->e_phoff + i * ehdr->e_phentsize);
-        if (phdr->p_type != PT_LOAD)
-            continue;
-        if (phdr->p_filesz > 0) {
-            memcpy((void *)phdr->p_vaddr,
-                   prog_data + phdr->p_offset,
-                   phdr->p_filesz);
-        }
-    }
 
     /* Reset signal handlers: custom handlers → SIG_DFL, keep SIG_IGN */
     for (int i = 0; i < 32; i++) {
@@ -248,14 +241,180 @@ static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
 
     /* Set up interrupt frame to jump to new entry point */
     frame->rip = elf_result.entry_point;
-    frame->rsp = USER_STACK_TOP;
+    frame->rsp = entry_rsp;
     frame->rax = 0;
-    frame->rdi = 0;
+    frame->rdi = 1;                /* argc */
+    frame->rsi = entry_argv_ptr;   /* argv ptr */
 
-    debug_printf("syscall: exec '%s' PID=%u entry=0x%x\n",
+    debug_printf("syscall: exec '%s' PID=%u entry=0x%x argc=1\n",
                  name_buf, (uint64_t)cur->pid, elf_result.entry_point);
 
     /* Return via IRETQ takes process to new entry point — never returns to old code */
+}
+
+/* sys_execv(path, argc, argv[]) — RAX=26
+ * Replaces current process image with a new ELF, passing argv to _start.
+ * arg1=RDI=path, arg2=RSI=argc, arg3=RDX=user_argv_ptr */
+__attribute__((noinline))
+static void syscall_execv(struct interrupt_frame *frame,
+                          uint64_t arg1, uint64_t arg2, uint64_t arg3) {
+#define EXECV_MAX_ARGS 32
+#define EXECV_MAX_ARG_LEN 256
+    const char *path = (const char *)arg1;
+    int user_argc = (int)arg2;
+    const char **user_argv = (const char **)arg3;
+    struct process *cur = scheduler_get_current();
+
+    /* Validate pointers */
+    if ((uint64_t)path >= KERNEL_VMA || (uint64_t)user_argv >= KERNEL_VMA) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+    if (user_argc < 0 || user_argc > EXECV_MAX_ARGS)
+        user_argc = EXECV_MAX_ARGS;
+
+    /* Copy path to kernel buffer */
+    char name_buf[64];
+    strncpy(name_buf, path, sizeof(name_buf) - 1);
+    name_buf[sizeof(name_buf) - 1] = '\0';
+
+    /* Extract basename for argv[0] */
+    char *base = name_buf;
+    for (char *p = name_buf; *p; p++)
+        if (*p == '/') base = p + 1;
+
+    /* Copy argv strings from user space into kernel buffers */
+    char arg_storage[EXECV_MAX_ARGS][EXECV_MAX_ARG_LEN];
+    const char *kern_argv[EXECV_MAX_ARGS];
+    int argc = 0;
+
+    /* argv[0] is always the basename of path */
+    strncpy(arg_storage[0], base, EXECV_MAX_ARG_LEN - 1);
+    arg_storage[0][EXECV_MAX_ARG_LEN - 1] = '\0';
+    kern_argv[argc++] = arg_storage[0];
+
+    /* Copy remaining argv from user space (skip user argv[0]) */
+    for (int i = 1; i < user_argc && argc < EXECV_MAX_ARGS; i++) {
+        uint64_t uptr = 0;
+        /* Read the pointer from user argv array */
+        const char **entry = user_argv + i;
+        if ((uint64_t)entry >= KERNEL_VMA)
+            break;
+        uptr = (uint64_t)*entry;
+        if (!uptr || uptr >= KERNEL_VMA)
+            break;
+        strncpy(arg_storage[argc], (const char *)uptr, EXECV_MAX_ARG_LEN - 1);
+        arg_storage[argc][EXECV_MAX_ARG_LEN - 1] = '\0';
+        kern_argv[argc] = arg_storage[argc];
+        argc++;
+    }
+
+    /* Load program: try ext2 then RAMFS */
+    uint64_t prog_size = 0;
+    const uint8_t *prog_data = NULL;
+    uint8_t *ext2_buf = NULL;
+
+    if (ext2_is_mounted()) {
+        char ext2_path[72];
+        ext2_path[0] = '/'; ext2_path[1] = 'b'; ext2_path[2] = 'i';
+        ext2_path[3] = 'n'; ext2_path[4] = '/';
+        strncpy(ext2_path + 5, name_buf, sizeof(ext2_path) - 6);
+        ext2_path[sizeof(ext2_path) - 1] = '\0';
+
+        uint32_t ino = ext2_path_lookup(ext2_path);
+        if (ino) {
+            struct ext2_inode inode;
+            if (ext2_read_inode(ino, &inode) == 0 && inode.i_size > 0) {
+                ext2_buf = (uint8_t *)kmalloc(inode.i_size);
+                if (ext2_buf) {
+                    int bytes = ext2_read_file(&inode, 0, inode.i_size, ext2_buf);
+                    if (bytes > 0) {
+                        prog_data = ext2_buf;
+                        prog_size = (uint64_t)bytes;
+                    }
+                }
+            }
+        }
+    }
+    if (!prog_data)
+        prog_data = ramfs_get_file_data(name_buf, &prog_size);
+
+    if (!prog_data) {
+        debug_printf("syscall: execv '%s' not found\n", name_buf);
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    if (elf_validate(prog_data, prog_size) < 0) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    uint64_t new_cr3 = user_vm_create_address_space();
+    if (!new_cr3) {
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    struct elf_load_result elf_result;
+    if (elf_load(new_cr3, prog_data, prog_size, &elf_result) < 0) {
+        user_vm_destroy_address_space(new_cr3);
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    uint64_t stack_phys = pmm_alloc_page();
+    if (!stack_phys) {
+        user_vm_destroy_address_space(new_cr3);
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+    memset(PHYS_TO_VIRT(stack_phys), 0, PAGE_SIZE);
+    if (user_vm_map_page(new_cr3, USER_STACK_BOTTOM,
+                         stack_phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER) < 0) {
+        pmm_free_page(stack_phys);
+        user_vm_destroy_address_space(new_cr3);
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    uint64_t entry_rsp, entry_argv_ptr;
+    if (elf_setup_stack(stack_phys, USER_STACK_BOTTOM, argc, kern_argv,
+                        &entry_rsp, &entry_argv_ptr) < 0) {
+        user_vm_destroy_address_space(new_cr3);
+        frame->rax = (uint64_t)-1;
+        return;
+    }
+
+    /* === Point of no return === */
+    uint64_t old_cr3 = cur->cr3;
+    cur->cr3 = new_cr3;
+    write_cr3(scheduler_get_kernel_cr3());
+    if (old_cr3)
+        user_vm_destroy_address_space(old_cr3);
+    write_cr3(new_cr3);
+
+    for (int i = 0; i < 32; i++) {
+        if (cur->sig_handlers[i] > 1)
+            cur->sig_handlers[i] = 0;
+    }
+    cur->sig_pending = 0;
+    cur->in_signal_handler = false;
+
+    strncpy(cur->name, arg_storage[0], sizeof(cur->name) - 1);
+    cur->name[sizeof(cur->name) - 1] = '\0';
+    cur->user_program_data = prog_data;
+    cur->user_program_size = prog_size;
+
+    frame->rip = elf_result.entry_point;
+    frame->rsp = entry_rsp;
+    frame->rax = 0;
+    frame->rdi = (uint64_t)argc;
+    frame->rsi = entry_argv_ptr;
+
+    debug_printf("syscall: execv '%s' PID=%u entry=0x%x argc=%d\n",
+                 arg_storage[0], (uint64_t)cur->pid,
+                 elf_result.entry_point, (uint64_t)argc);
 }
 
 __attribute__((noinline))
@@ -1400,6 +1559,10 @@ static void syscall_handler(struct interrupt_frame *frame) {
         frame->rax = (uint64_t)-1;
         return;
     }
+
+    case 26: /* SYS_EXECV */
+        syscall_execv(frame, arg1, arg2, arg3);
+        return;
 
     default:
         debug_printf("syscall: unknown syscall %u\n", num);

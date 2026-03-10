@@ -67,13 +67,14 @@ int elf_load(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
             return -1;
         }
 
-        /* Allocate and map pages for this segment */
+        /* Determine page permissions from ELF segment flags */
+        uint64_t flags = PTE_PRESENT | PTE_USER;
+        if (phdr->p_flags & PF_W)   flags |= PTE_WRITABLE;
+        if (!(phdr->p_flags & PF_X)) flags |= PTE_NX;
+
         uint64_t seg_start = phdr->p_vaddr & ~(PAGE_SIZE - 1);
         uint64_t seg_end = (phdr->p_vaddr + phdr->p_memsz + PAGE_SIZE - 1) &
                            ~(PAGE_SIZE - 1);
-        /* Always map writable — the trampoline needs to copy data in.
-         * (A future optimization could remap read-only after loading.) */
-        uint64_t flags = PTE_PRESENT | PTE_USER | PTE_WRITABLE;
 
         for (uint64_t addr = seg_start; addr < seg_end; addr += PAGE_SIZE) {
             uint64_t phys = pmm_alloc_page();
@@ -81,17 +82,88 @@ int elf_load(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
                 debug_printf("elf_load: out of physical pages\n");
                 return -1;
             }
-            memset(PHYS_TO_VIRT(phys), 0, PAGE_SIZE);
+            uint8_t *kpage = (uint8_t *)PHYS_TO_VIRT(phys);
+            memset(kpage, 0, PAGE_SIZE);
+
+            /* Copy file bytes that overlap this page */
+            uint64_t seg_file_end = phdr->p_vaddr + phdr->p_filesz;
+            uint64_t copy_start = phdr->p_vaddr > addr ? phdr->p_vaddr : addr;
+            uint64_t copy_end   = seg_file_end  < addr + PAGE_SIZE ? seg_file_end : addr + PAGE_SIZE;
+            if (copy_start < copy_end) {
+                uint64_t dst_off = copy_start - addr;
+                uint64_t src_off = phdr->p_offset + (copy_start - phdr->p_vaddr);
+                memcpy(kpage + dst_off, data + src_off, copy_end - copy_start);
+            }
+
             if (user_vm_map_page(pml4_phys, addr, phys, flags) < 0) {
                 debug_printf("elf_load: failed to map page at 0x%x\n", addr);
                 return -1;
             }
         }
 
-        debug_printf("elf_load: segment %u vaddr=0x%x filesz=%u memsz=%u\n",
-                     (uint64_t)i, phdr->p_vaddr, phdr->p_filesz, phdr->p_memsz);
+        debug_printf("elf_load: segment %u vaddr=0x%x filesz=%u memsz=%u flags=0x%x\n",
+                     (uint64_t)i, phdr->p_vaddr, phdr->p_filesz,
+                     phdr->p_memsz, (uint64_t)phdr->p_flags);
     }
 
     debug_printf("elf_load: entry=0x%x\n", result->entry_point);
+    return 0;
+}
+
+/* Set up SysV AMD64 ABI stack layout in a physical page.
+ * stack_phys     - physical address of the 4 KB stack page
+ * stack_base_virt - user virtual address at which the page is mapped
+ * argc / argv    - program arguments (argv[0] = program name)
+ * rsp_out        - set to user RSP (points to argc value on stack)
+ * argv_ptr_out   - set to user virtual address of argv[0] pointer
+ * Returns 0 on success, -1 if arguments don't fit in one page. */
+int elf_setup_stack(uint64_t stack_phys, uint64_t stack_base_virt,
+                    int argc, const char **argv,
+                    uint64_t *rsp_out, uint64_t *argv_ptr_out) {
+#define ELF_MAX_ARGS    32
+#define ELF_MAX_ARG_LEN 256
+
+    if (argc > ELF_MAX_ARGS)
+        argc = ELF_MAX_ARGS;
+
+    uint8_t *kpage = (uint8_t *)PHYS_TO_VIRT(stack_phys);
+    uint64_t argv_ptrs[ELF_MAX_ARGS];
+    int write_pos = PAGE_SIZE;  /* index into kpage; strings written downward */
+
+    /* Write argv strings from top of page downward */
+    for (int i = argc - 1; i >= 0; i--) {
+        const char *s = argv[i] ? argv[i] : "";
+        int len = 0;
+        while (s[len] && len < ELF_MAX_ARG_LEN - 1) len++;
+
+        if (write_pos < len + 1)
+            return -1;
+
+        write_pos -= len + 1;
+        memcpy(kpage + write_pos, s, (uint64_t)len);
+        kpage[write_pos + len] = '\0';
+        argv_ptrs[i] = stack_base_virt + (uint64_t)write_pos;
+    }
+
+    /* Block: [argc][argv[0]..argv[argc-1]][NULL][NULL(envp)] */
+    int block_size = (argc + 3) * 8;
+    if (write_pos < block_size)
+        return -1;
+
+    /* Find 16-byte aligned start for the block */
+    int start = (write_pos - block_size) & ~15;
+    if (start < 0)
+        return -1;
+
+    /* Write block into physical page via kernel virtual mapping */
+    uint64_t *p = (uint64_t *)(kpage + start);
+    *p++ = (uint64_t)argc;
+    for (int i = 0; i < argc; i++)
+        *p++ = argv_ptrs[i];
+    *p++ = 0;  /* argv[argc] = NULL */
+    *p   = 0;  /* envp[0]   = NULL */
+
+    *rsp_out      = stack_base_virt + (uint64_t)start;
+    *argv_ptr_out = stack_base_virt + (uint64_t)start + 8;
     return 0;
 }
