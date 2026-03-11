@@ -529,8 +529,9 @@ def run_tests(native=False):
         # --- Test 30: run hello ---
         interactive_test("run_hello", "run hello", "Hello from user mode!")
 
-        # --- Test 31: ping 8.8.8.8 ---
-        interactive_test("ping_8888", "ping 8.8.8.8", "Reply from", post_delay=5.0)
+        # --- Test 31: ping QEMU DNS server (10.0.2.3, internal to SLIRP) ---
+        # Note: external IPs like 8.8.8.8 fail in CI (no outbound ICMP allowed)
+        interactive_test("ping_dns", "ping 10.0.2.3", "Reply from", post_delay=5.0)
 
     except RuntimeError as e:
         # Boot failure — fill remaining tests as failed
