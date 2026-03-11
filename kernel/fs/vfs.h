@@ -5,7 +5,7 @@
 
 #define VFS_MAX_NAME    32
 #define VFS_MAX_FDS     64
-#define VFS_MAX_NODES   64
+#define VFS_MAX_NODES   128
 
 /* File types */
 #define VFS_FILE        1

@@ -21,4 +21,7 @@ int vmm_map_page(uint64_t virt, uint64_t phys, uint64_t flags);
 void vmm_unmap_page(uint64_t virt);
 uint64_t vmm_get_physical(uint64_t virt);
 
+/* Map a contiguous range of physical pages to virtual addresses */
+void vmm_map_range(uint64_t phys_base, uint64_t virt_base, uint64_t n_pages, uint64_t flags);
+
 #endif /* VMM_H */

@@ -549,6 +549,16 @@ static void cmd_cat(int argc, char **argv) {
     /* Regular VFS file */
     int fd = vfs_open(path);
     if (fd < 0) {
+        /* Try ext2 filesystem */
+        if (ext2_is_mounted()) {
+            uint8_t ext2_buf[4096];
+            int bytes = ext2_read_path(path, ext2_buf, sizeof(ext2_buf) - 1);
+            if (bytes >= 0) {
+                ext2_buf[bytes] = 0;
+                vga_printf("%s", (char *)ext2_buf);
+                return;
+            }
+        }
         vga_printf("File not found: %s\n", path);
         return;
     }

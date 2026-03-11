@@ -47,6 +47,12 @@ typedef uint64_t           size_t;
 #define SYS_EPOLL_CREATE  31
 #define SYS_EPOLL_CTL     32
 #define SYS_EPOLL_WAIT    33
+#define SYS_LSEEK       34
+#define SYS_RENAME      35
+#define SYS_GETTIME     36
+#define SYS_IOCTL       37
+#define SYS_SEND        38
+#define SYS_RECV        39
 
 /* Open flags */
 #define O_CREAT         0x40
@@ -79,6 +85,16 @@ static inline uint64_t syscall3(uint64_t num, uint64_t a1, uint64_t a2, uint64_t
     __asm__ volatile("int $0x80"
         : "=a"(ret)
         : "a"(num), "D"(a1), "S"(a2), "d"(a3)
+        : "rcx", "r11", "memory");
+    return ret;
+}
+
+static inline uint64_t syscall4(uint64_t num, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t a4) {
+    uint64_t ret;
+    register uint64_t r10 __asm__("r10") = a4;
+    __asm__ volatile("int $0x80"
+        : "=a"(ret)
+        : "a"(num), "D"(a1), "S"(a2), "d"(a3), "r"(r10)
         : "rcx", "r11", "memory");
     return ret;
 }
@@ -340,6 +356,30 @@ static inline int64_t sys_epoll_wait(int epfd, struct epoll_event *events,
     args.timeout_ms = timeout_ms;
     args.events_ptr = (uint64_t)events;
     return (int64_t)syscall2(SYS_EPOLL_WAIT, (uint64_t)epfd, (uint64_t)&args);
+}
+
+/* lseek whence values */
+#define SEEK_SET  0
+#define SEEK_CUR  1
+#define SEEK_END  2
+
+static inline int64_t sys_lseek(int fd, int64_t offset, int whence) {
+    return (int64_t)syscall3(SYS_LSEEK, (uint64_t)fd, (uint64_t)offset, (uint64_t)whence);
+}
+static inline int64_t sys_rename(const char *old, const char *new_path) {
+    return (int64_t)syscall2(SYS_RENAME, (uint64_t)old, (uint64_t)new_path);
+}
+static inline uint64_t sys_gettime(void) {
+    return syscall0(SYS_GETTIME);
+}
+static inline int64_t sys_ioctl(int fd, uint32_t cmd, uint64_t arg) {
+    return (int64_t)syscall3(SYS_IOCTL, (uint64_t)fd, (uint64_t)cmd, arg);
+}
+static inline int64_t sys_send(int fd, const void *buf, uint64_t len, int flags) {
+    return (int64_t)syscall4(SYS_SEND, (uint64_t)fd, (uint64_t)buf, len, (uint64_t)flags);
+}
+static inline int64_t sys_recv(int fd, void *buf, uint64_t len, int flags) {
+    return (int64_t)syscall4(SYS_RECV, (uint64_t)fd, (uint64_t)buf, len, (uint64_t)flags);
 }
 
 #endif /* USER_SYSCALL_H */

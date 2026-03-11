@@ -86,7 +86,9 @@ C_SRCS = kernel/kernel.c \
          kernel/net/socket.c \
          kernel/memory/mmap.c \
          kernel/fs/epoll.c \
-         kernel/fs/poll.c
+         kernel/fs/poll.c \
+         kernel/drivers/fb.c \
+         kernel/drivers/mouse.c
 
 # Object files
 ASM_OBJS = $(ASM_SRCS:.asm=.o)
@@ -94,7 +96,7 @@ C_OBJS = $(C_SRCS:.c=.o)
 C_DEPS = $(C_OBJS:.o=.d)
 
 # User program embedded objects
-USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm net_test nc httpd ping exec_test waitpid_test argv_test fork_exec_test mmap_test epoll_test
+USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm net_test nc httpd ping exec_test waitpid_test argv_test fork_exec_test mmap_test epoll_test cp mv df grep head tail top kill ifconfig netstat sh
 USER_EMBED_OBJS = $(patsubst %,user/%_embed.o,$(USER_PROGRAMS))
 
 OBJS = $(ASM_OBJS) $(C_OBJS) $(USER_EMBED_OBJS)
@@ -103,7 +105,7 @@ KERNEL_BIN = kernel.bin
 ISO = hobbyos.iso
 ISO_DIR = isodir
 
-.PHONY: all clean iso run debug test test-host test-qemu test-interactive install-hooks
+.PHONY: all clean iso run debug test test-host test-qemu test-interactive test-native install-hooks
 
 all: $(KERNEL_BIN)
 
@@ -198,6 +200,19 @@ test-interactive: iso
 	dd if=/dev/zero of=disk.img bs=1M count=16 2>/dev/null
 	mkfs.ext2 -F disk.img >/dev/null 2>&1
 	python3 tests/test_interactive.py
+
+# Native QEMU interactive tests (Windows host, TCP serial, catches QEMU-version-specific bugs)
+# Requires: hobbyos.iso + disk.img built via Docker, native QEMU installed
+test-native:
+	@echo "=== Native QEMU Interactive Tests ==="
+	@echo "Using native Windows QEMU with TCP serial..."
+	@test -f hobbyos.iso || (echo "ERROR: hobbyos.iso not found. Build with Docker first." && exit 1)
+	@if [ ! -f disk.img ]; then \
+		echo "Creating fresh ext2 disk image via Docker..."; \
+		dd if=/dev/zero of=disk.img bs=1M count=16 2>/dev/null; \
+		MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test mkfs.ext2 -F disk.img >/dev/null 2>&1; \
+	fi
+	python3 tests/test_interactive.py --native
 
 # Run all tests
 test: test-host test-qemu

@@ -3,9 +3,12 @@
 HobbyOS Interactive QEMU Test Suite
 
 Launches QEMU with monitor socket, sends keystrokes via sendkey commands,
-and validates serial output for 21 interactive features across all 5 phases.
+and validates serial output for 31 interactive features across all 5 phases.
 
-Usage: python3 tests/test_interactive.py
+Usage: python3 tests/test_interactive.py [--native]
+  --native   Use native Windows QEMU with TCP serial (for QEMU 10.x testing)
+  (default)  Use Docker QEMU with file-based serial
+
 Expects: hobbyos.iso and disk.img in the working directory.
 Outputs: tests/interactive_serial.log, tests/interactive_results.json
 """
@@ -15,6 +18,7 @@ import os
 import socket
 import subprocess
 import sys
+import threading
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -27,6 +31,11 @@ RESULTS_JSON = os.path.join(SCRIPT_DIR, "interactive_results.json")
 BOOT_TIMEOUT = 60
 TEST_TIMEOUT = 5
 OVERALL_TIMEOUT = 120
+
+# Native QEMU (Windows) settings
+NATIVE_QEMU = "/c/msys64/ucrt64/bin/qemu-system-x86_64.exe"
+NATIVE_SERIAL_PORT = 5555
+NATIVE_MONITOR_PORT = 4445
 
 # QEMU sendkey mapping
 KEY_MAP = {
@@ -56,42 +65,99 @@ def char_to_sendkey(ch):
 class QEMUSession:
     """Manages a QEMU instance with monitor socket for sending keystrokes."""
 
-    def __init__(self):
+    def __init__(self, native=False):
         self.process = None
         self.monitor_sock = None
         self.serial_pos = 0
+        self.native = native
+        # TCP serial state (native mode)
+        self._serial_buf = ""
+        self._serial_lock = threading.Lock()
+        self._serial_sock = None
+        self._serial_thread = None
+        self._serial_stop = threading.Event()
+
+    def _serial_reader_thread(self):
+        """Background thread that reads from TCP serial socket into buffer."""
+        while not self._serial_stop.is_set():
+            try:
+                data = self._serial_sock.recv(4096)
+                if not data:
+                    break
+                with self._serial_lock:
+                    self._serial_buf += data.decode('utf-8', errors='replace')
+            except socket.timeout:
+                continue
+            except (OSError, ConnectionResetError):
+                break
 
     def start(self):
-        """Launch QEMU with serial file output and monitor TCP socket."""
+        """Launch QEMU with serial output and monitor TCP socket."""
         # Clean up old serial log
         if os.path.exists(SERIAL_LOG):
             os.remove(SERIAL_LOG)
-        # Touch the file so reads don't fail
+        # Touch the file so reads don't fail (used in both modes for final dump)
         open(SERIAL_LOG, 'w').close()
 
-        cmd = [
-            "qemu-system-x86_64",
-            "-cdrom", ISO_PATH,
-            "-serial", "file:" + SERIAL_LOG,
-            "-monitor", "tcp:127.0.0.1:4444,server,nowait",
-            "-display", "none",
-            "-m", "128M",
-            "-no-reboot", "-no-shutdown",
-            "-drive", "file=" + DISK_PATH + ",format=raw,if=ide",
-            "-netdev", "user,id=net0",
-            "-device", "e1000,netdev=net0",
-        ]
+        if self.native:
+            monitor_port = NATIVE_MONITOR_PORT
+            cmd = [
+                NATIVE_QEMU,
+                "-cdrom", ISO_PATH,
+                "-serial", "tcp:127.0.0.1:%d,server=on,wait=off" % NATIVE_SERIAL_PORT,
+                "-monitor", "tcp:127.0.0.1:%d,server=on,wait=off" % monitor_port,
+                "-m", "128M",
+                "-no-reboot", "-no-shutdown",
+                "-drive", "file=%s,format=raw,if=ide" % DISK_PATH,
+                "-netdev", "user,id=net0",
+                "-device", "e1000,netdev=net0",
+            ]
+        else:
+            monitor_port = 4444
+            cmd = [
+                "qemu-system-x86_64",
+                "-cdrom", ISO_PATH,
+                "-serial", "file:" + SERIAL_LOG,
+                "-monitor", "tcp:127.0.0.1:%d,server,nowait" % monitor_port,
+                "-display", "vnc=127.0.0.1:99",
+                "-m", "128M",
+                "-no-reboot", "-no-shutdown",
+                "-drive", "file=" + DISK_PATH + ",format=raw,if=ide",
+                "-netdev", "user,id=net0",
+                "-device", "e1000,netdev=net0",
+            ]
 
         self.process = subprocess.Popen(
             cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
         )
 
-        # Connect to monitor socket (retry up to 3 times)
-        for attempt in range(3):
+        # In native mode, connect to TCP serial
+        if self.native:
+            for attempt in range(5):
+                time.sleep(1)
+                try:
+                    self._serial_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    self._serial_sock.connect(("127.0.0.1", NATIVE_SERIAL_PORT))
+                    self._serial_sock.settimeout(0.5)
+                    # Start reader thread
+                    self._serial_thread = threading.Thread(
+                        target=self._serial_reader_thread, daemon=True)
+                    self._serial_thread.start()
+                    break
+                except (ConnectionRefusedError, OSError):
+                    if self._serial_sock:
+                        self._serial_sock.close()
+                        self._serial_sock = None
+                    if attempt == 4:
+                        self.cleanup()
+                        raise RuntimeError("Failed to connect to QEMU serial TCP port")
+
+        # Connect to monitor socket (retry up to 5 times)
+        for attempt in range(5):
             time.sleep(1)
             try:
                 self.monitor_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.monitor_sock.connect(("127.0.0.1", 4444))
+                self.monitor_sock.connect(("127.0.0.1", monitor_port))
                 self.monitor_sock.settimeout(2)
                 # Read the initial QEMU monitor greeting
                 try:
@@ -103,9 +169,9 @@ class QEMUSession:
                 if self.monitor_sock:
                     self.monitor_sock.close()
                     self.monitor_sock = None
-                if attempt == 2:
+                if attempt == 4:
                     self.cleanup()
-                    raise RuntimeError("Failed to connect to QEMU monitor after 3 attempts")
+                    raise RuntimeError("Failed to connect to QEMU monitor after 5 attempts")
 
     def send_monitor_command(self, cmd):
         """Send a command to the QEMU monitor."""
@@ -135,7 +201,10 @@ class QEMUSession:
         time.sleep(0.05)
 
     def read_serial(self):
-        """Read full serial log."""
+        """Read full serial log (from file in Docker mode, from TCP buffer in native mode)."""
+        if self.native:
+            with self._serial_lock:
+                return self._serial_buf
         try:
             with open(SERIAL_LOG, 'r', errors='replace') as f:
                 return f.read()
@@ -175,7 +244,23 @@ class QEMUSession:
         return False
 
     def cleanup(self):
-        """Kill QEMU process and close monitor socket."""
+        """Kill QEMU process and close sockets."""
+        # Stop serial reader thread
+        self._serial_stop.set()
+        if self._serial_sock:
+            try:
+                self._serial_sock.close()
+            except Exception:
+                pass
+        if self._serial_thread and self._serial_thread.is_alive():
+            self._serial_thread.join(timeout=2)
+        # In native mode, dump TCP serial buffer to log file for debugging
+        if self.native and self._serial_buf:
+            try:
+                with open(SERIAL_LOG, 'w') as f:
+                    f.write(self._serial_buf)
+            except Exception:
+                pass
         if self.monitor_sock:
             try:
                 self.monitor_sock.close()
@@ -189,12 +274,18 @@ class QEMUSession:
                 pass
 
 
-def run_tests():
-    """Run all 23 interactive tests."""
+def run_tests(native=False):
+    """Run all 31 interactive tests."""
     overall_start = time.time()
     results = []
 
-    qemu = QEMUSession()
+    if native:
+        print("=== Native QEMU mode (TCP serial) ===")
+        print("QEMU binary: %s" % NATIVE_QEMU)
+    else:
+        print("=== Docker QEMU mode (file serial) ===")
+
+    qemu = QEMUSession(native=native)
 
     try:
         qemu.start()
@@ -414,9 +505,36 @@ def run_tests():
         # --- Test 23: ping gateway ---
         interactive_test("ping_gateway", "ping 10.0.2.2", "Reply from", post_delay=5.0)
 
+        # --- Test 24: touch (create file for cp/mv tests) ---
+        interactive_test("touch_for_cp", "run touch /cptest.txt", "ext2: created")
+
+        # --- Test 25: cp ---
+        interactive_test("run_cp", "run cp /cptest.txt /cptest_copy.txt",
+                         "ext2: created", post_delay=1.0)
+
+        # --- Test 26: mv ---
+        interactive_test("run_mv", "run mv /cptest_copy.txt /cptest_renamed.txt",
+                         "ext2: renamed", post_delay=1.0)
+
+        # --- Test 27: ls shows renamed file (shell ls lists ext2 entries) ---
+        interactive_test("ls_after_mv", "ls", "cptest_renamed.txt",
+                         post_delay=3.0)
+
+        # --- Test 28: df ---
+        interactive_test("run_df", "run df", "total_blocks", post_delay=2.0)
+
+        # --- Test 29: run top ---
+        interactive_test("run_top", "run top", "PID", post_delay=1.0)
+
+        # --- Test 30: run hello ---
+        interactive_test("run_hello", "run hello", "Hello from user mode!")
+
+        # --- Test 31: ping 8.8.8.8 ---
+        interactive_test("ping_8888", "ping 8.8.8.8", "Reply from", post_delay=5.0)
+
     except RuntimeError as e:
         # Boot failure — fill remaining tests as failed
-        while len(results) < 23:
+        while len(results) < 31:
             results.append({
                 "name": "skipped",
                 "passed": False,
@@ -463,10 +581,28 @@ def run_tests():
 
 
 if __name__ == "__main__":
+    native_mode = "--native" in sys.argv
+
     if not os.path.exists(ISO_PATH):
         print("ERROR: %s not found. Run 'make iso' first." % ISO_PATH)
         sys.exit(1)
     if not os.path.exists(DISK_PATH):
         print("ERROR: %s not found. Run 'make test-interactive' to create it." % DISK_PATH)
         sys.exit(1)
-    sys.exit(run_tests())
+
+    if native_mode:
+        # Resolve MSYS path to Windows path for native QEMU
+        qemu_path = NATIVE_QEMU
+        # Check both MSYS and Windows-style paths
+        import shutil
+        if not shutil.which(qemu_path) and not os.path.exists(qemu_path):
+            # Try Windows-style path
+            win_path = "C:/msys64/ucrt64/bin/qemu-system-x86_64.exe"
+            if os.path.exists(win_path):
+                NATIVE_QEMU = win_path
+            else:
+                print("ERROR: Native QEMU not found at %s" % qemu_path)
+                print("Install QEMU or update NATIVE_QEMU path in test_interactive.py")
+                sys.exit(1)
+
+    sys.exit(run_tests(native=native_mode))

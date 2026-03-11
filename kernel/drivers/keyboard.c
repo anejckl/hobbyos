@@ -1,5 +1,6 @@
 #include "keyboard.h"
 #include "tty.h"
+#include "pit.h"
 #include "../arch/x86_64/isr.h"
 #include "../interrupts/interrupts.h"
 
@@ -13,6 +14,13 @@ static volatile uint32_t kb_write_idx = 0;
 static volatile bool kb_shift = false;
 static volatile bool kb_ctrl = false;
 static volatile bool kb_caps = false;
+
+/* Tick when modifier was last pressed (for stuck-key detection).
+ * When QEMU loses/regains window focus, key release events can be lost,
+ * leaving modifiers stuck. Auto-clear after 3 seconds of no re-press. */
+#define MODIFIER_TIMEOUT_TICKS 300  /* 3 seconds at 100 Hz */
+static volatile uint64_t kb_ctrl_tick = 0;
+static volatile uint64_t kb_shift_tick = 0;
 
 /* US QWERTY scan code to ASCII (set 1, make codes only) */
 static const char scancode_to_ascii[128] = {
@@ -38,6 +46,15 @@ static const char scancode_to_ascii_shift[128] = {
 
 static void keyboard_handler(struct interrupt_frame *frame) {
     (void)frame;
+
+    /* Check PS/2 status: bit 5 (AUXDATA) indicates data from mouse, not keyboard.
+     * QEMU 10.1.3 can route mouse bytes through IRQ 1 — skip them. */
+    uint8_t status = inb(0x64);
+    if (status & 0x20) {
+        inb(KEYBOARD_DATA_PORT);  /* drain the mouse byte */
+        return;
+    }
+
     uint8_t scancode = inb(KEYBOARD_DATA_PORT);
 
     /* Key release (break code) */
@@ -54,14 +71,23 @@ static void keyboard_handler(struct interrupt_frame *frame) {
     switch (scancode) {
     case 0x2A: case 0x36:   /* Left/Right Shift */
         kb_shift = true;
+        kb_shift_tick = pit_get_ticks();
         return;
     case 0x1D:               /* Left Ctrl */
         kb_ctrl = true;
+        kb_ctrl_tick = pit_get_ticks();
         return;
     case 0x3A:               /* Caps Lock */
         kb_caps = !kb_caps;
         return;
     }
+
+    /* Auto-clear stuck modifiers (e.g., QEMU focus loss dropped release event) */
+    uint64_t now = pit_get_ticks();
+    if (kb_ctrl && (now - kb_ctrl_tick) > MODIFIER_TIMEOUT_TICKS)
+        kb_ctrl = false;
+    if (kb_shift && (now - kb_shift_tick) > MODIFIER_TIMEOUT_TICKS)
+        kb_shift = false;
 
     char c;
     if (kb_shift)

@@ -12,6 +12,7 @@
 /* VMA types */
 #define VMA_ANON       0
 #define VMA_FILE       1
+#define VMA_DEVICE     2
 
 /* mmap prot flags */
 #define PROT_NONE      0
@@ -42,11 +43,12 @@ typedef struct {
     uint64_t end;           /* page-aligned, exclusive */
     uint32_t prot;
     uint32_t flags;
-    uint8_t  type;          /* VMA_ANON or VMA_FILE */
+    uint8_t  type;          /* VMA_ANON, VMA_FILE, or VMA_DEVICE */
     bool     in_use;
     uint32_t file_inode;    /* ext2 inode number (VMA_FILE only) */
     uint64_t file_offset;   /* offset into file */
     uint64_t shared_phys;   /* MAP_SHARED anon: shared physical page */
+    uint64_t dev_phys_base; /* VMA_DEVICE: device physical base address */
 } vma_t;
 
 struct process; /* forward decl */

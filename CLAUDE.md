@@ -12,6 +12,7 @@ make test         # Run all tests (host unit tests + QEMU smoke test)
 make test-host    # Run host-side unit tests only (fast, no QEMU)
 make test-qemu    # Run QEMU boot smoke test only (requires 'make iso')
 make test-interactive  # Interactive QEMU tests (~60-90s, sends keystrokes, checks serial)
+make test-native       # Native Windows QEMU tests (TCP serial, catches version-specific bugs)
 make install-hooks # Install git pre-commit hook (runs test-host)
 ```
 
@@ -518,3 +519,7 @@ Then:
 14. **`vga_printf` supports `%-Nu` `%-Ns` `%-Nd` `%-Nx`** (left-aligned with width N), `%0Nu` `%0Nx` (zero-padded), and `%Nu` (right-aligned). All args are 64-bit (see gotcha 9).
 
 15. **`vga_putchar()` auto-mirrors to serial** (COM1) once `debug_init()` completes. Shell commands should use `vga_printf()` — no separate `debug_printf()` needed. Interactive tests validate output via the serial log.
+
+16. **PS/2 mouse init must drain ACK and unmask cascade.** After enabling the mouse (`0xF4`), it sends an ACK byte (0xFA) on port 0x60. This byte MUST be read immediately — if left in the PS/2 output buffer, it blocks ALL keyboard input. Also, IRQ 12 (mouse) is on the slave PIC, so cascade (IRQ 2) on the master PIC must be unmasked, or the ACK will never be read by the handler.
+
+17. **Native QEMU (10.1.3) `-serial file:` is broken on Windows** — output is never flushed to disk. Use `-serial stdio` for interactive use or `-serial tcp:` for programmatic access.

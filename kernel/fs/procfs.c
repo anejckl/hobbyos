@@ -1,7 +1,9 @@
 #include "procfs.h"
 #include "vfs.h"
+#include "ext2.h"
 #include "../process/process.h"
 #include "../scheduler/scheduler.h"
+#include "../net/net.h"
 #include "../string.h"
 #include "../debug/debug.h"
 
@@ -167,11 +169,102 @@ static int procfs_gen_fd(uint32_t pid, uint8_t *buf, uint64_t offset,
     return to_copy;
 }
 
+/* Generate /proc/net/if content */
+static int procfs_gen_net_if(uint8_t *buf, uint64_t offset, uint64_t size) {
+    char tmp[256];
+    int len = 0;
+    /* Use hard-coded QEMU SLIRP defaults from net.h */
+    uint32_t ip  = NET_IP;
+    uint32_t nm  = NET_NETMASK;
+    /* Format IP: a.b.c.d */
+    memcpy(tmp + len, "IP: ", 4); len += 4;
+    len += int_to_str(tmp + len, (int64_t)((ip >> 24) & 0xFF));
+    tmp[len++] = '.';
+    len += int_to_str(tmp + len, (int64_t)((ip >> 16) & 0xFF));
+    tmp[len++] = '.';
+    len += int_to_str(tmp + len, (int64_t)((ip >> 8) & 0xFF));
+    tmp[len++] = '.';
+    len += int_to_str(tmp + len, (int64_t)(ip & 0xFF));
+    tmp[len++] = '\n';
+    memcpy(tmp + len, "NETMASK: ", 9); len += 9;
+    len += int_to_str(tmp + len, (int64_t)((nm >> 24) & 0xFF));
+    tmp[len++] = '.';
+    len += int_to_str(tmp + len, (int64_t)((nm >> 16) & 0xFF));
+    tmp[len++] = '.';
+    len += int_to_str(tmp + len, (int64_t)((nm >> 8) & 0xFF));
+    tmp[len++] = '.';
+    len += int_to_str(tmp + len, (int64_t)(nm & 0xFF));
+    tmp[len++] = '\n';
+
+    if ((int64_t)offset >= len) return 0;
+    int avail = len - (int)offset;
+    int to_copy = (int)size < avail ? (int)size : avail;
+    memcpy(buf, tmp + offset, (size_t)to_copy);
+    return to_copy;
+}
+
+/* Generate /proc/fs/ext2 content */
+static int procfs_gen_fs_ext2(uint8_t *buf, uint64_t offset, uint64_t size) {
+    char tmp[256];
+    int len = 0;
+
+    if (!ext2_is_mounted()) {
+        memcpy(tmp, "ext2: not mounted\n", 18);
+        len = 18;
+    } else {
+        struct ext2_stats st;
+        if (ext2_get_stats(&st) != 0) {
+            memcpy(tmp, "ext2: error\n", 12);
+            len = 12;
+        } else {
+            memcpy(tmp + len, "total_blocks: ", 14); len += 14;
+            len += int_to_str(tmp + len, (int64_t)st.total_blocks);
+            tmp[len++] = '\n';
+            memcpy(tmp + len, "free_blocks: ", 13); len += 13;
+            len += int_to_str(tmp + len, (int64_t)st.free_blocks);
+            tmp[len++] = '\n';
+            memcpy(tmp + len, "total_inodes: ", 14); len += 14;
+            len += int_to_str(tmp + len, (int64_t)st.total_inodes);
+            tmp[len++] = '\n';
+            memcpy(tmp + len, "free_inodes: ", 13); len += 13;
+            len += int_to_str(tmp + len, (int64_t)st.free_inodes);
+            tmp[len++] = '\n';
+            memcpy(tmp + len, "block_size: ", 12); len += 12;
+            len += int_to_str(tmp + len, (int64_t)st.block_size);
+            tmp[len++] = '\n';
+        }
+    }
+
+    if ((int64_t)offset >= len) return 0;
+    int avail = len - (int)offset;
+    int to_copy = (int)size < avail ? (int)size : avail;
+    memcpy(buf, tmp + offset, (size_t)to_copy);
+    return to_copy;
+}
+
 /* Procfs read handler — dispatches based on path stored in node name */
 static int procfs_read(struct vfs_node *node, uint64_t offset, uint64_t size,
                        uint8_t *buffer) {
     if (!node || !buffer)
         return -1;
+
+    /* Check for special /proc/net/* and /proc/fs/* paths */
+    const char *p = node->name;
+    if (*p == '/') p++;
+    if (strncmp(p, "proc/net/if", 11) == 0)
+        return procfs_gen_net_if(buffer, offset, size);
+    if (strncmp(p, "proc/net/tcp", 12) == 0) {
+        /* Stub: no TCP connection table yet */
+        const char *msg = "Proto  Local           Remote\n";
+        int mlen = (int)strlen(msg);
+        if ((int64_t)offset >= mlen) return 0;
+        int avail = mlen - (int)offset;
+        int to_copy = (int)size < avail ? (int)size : avail;
+        memcpy(buffer, msg + offset, (size_t)to_copy);
+        return to_copy;
+    }
+    if (strncmp(p, "proc/fs/ext2", 12) == 0)
+        return procfs_gen_fs_ext2(buffer, offset, size);
 
     uint32_t pid = parse_pid_from_path(node->name);
     if (pid == 0)

@@ -38,6 +38,12 @@
 #define SYS_EPOLL_CREATE  31
 #define SYS_EPOLL_CTL     32
 #define SYS_EPOLL_WAIT    33
+#define SYS_LSEEK       34
+#define SYS_RENAME      35
+#define SYS_GETTIME     36
+#define SYS_IOCTL       37
+#define SYS_SEND        38
+#define SYS_RECV        39
 
 void syscall_init(void);
 

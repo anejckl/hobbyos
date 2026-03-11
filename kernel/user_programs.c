@@ -51,6 +51,28 @@ extern const uint8_t _binary_mmap_test_elf_start[];
 extern const uint8_t _binary_mmap_test_elf_end[];
 extern const uint8_t _binary_epoll_test_elf_start[];
 extern const uint8_t _binary_epoll_test_elf_end[];
+extern const uint8_t _binary_cp_elf_start[];
+extern const uint8_t _binary_cp_elf_end[];
+extern const uint8_t _binary_mv_elf_start[];
+extern const uint8_t _binary_mv_elf_end[];
+extern const uint8_t _binary_df_elf_start[];
+extern const uint8_t _binary_df_elf_end[];
+extern const uint8_t _binary_grep_elf_start[];
+extern const uint8_t _binary_grep_elf_end[];
+extern const uint8_t _binary_head_elf_start[];
+extern const uint8_t _binary_head_elf_end[];
+extern const uint8_t _binary_tail_elf_start[];
+extern const uint8_t _binary_tail_elf_end[];
+extern const uint8_t _binary_top_elf_start[];
+extern const uint8_t _binary_top_elf_end[];
+extern const uint8_t _binary_kill_elf_start[];
+extern const uint8_t _binary_kill_elf_end[];
+extern const uint8_t _binary_ifconfig_elf_start[];
+extern const uint8_t _binary_ifconfig_elf_end[];
+extern const uint8_t _binary_netstat_elf_start[];
+extern const uint8_t _binary_netstat_elf_end[];
+extern const uint8_t _binary_sh_elf_start[];
+extern const uint8_t _binary_sh_elf_end[];
 
 static const struct user_program programs[] = {
     {
@@ -173,6 +195,61 @@ static const struct user_program programs[] = {
         .data = _binary_epoll_test_elf_start,
         .size = 0
     },
+    {
+        .name = "cp",
+        .data = _binary_cp_elf_start,
+        .size = 0
+    },
+    {
+        .name = "mv",
+        .data = _binary_mv_elf_start,
+        .size = 0
+    },
+    {
+        .name = "df",
+        .data = _binary_df_elf_start,
+        .size = 0
+    },
+    {
+        .name = "grep",
+        .data = _binary_grep_elf_start,
+        .size = 0
+    },
+    {
+        .name = "head",
+        .data = _binary_head_elf_start,
+        .size = 0
+    },
+    {
+        .name = "tail",
+        .data = _binary_tail_elf_start,
+        .size = 0
+    },
+    {
+        .name = "top",
+        .data = _binary_top_elf_start,
+        .size = 0
+    },
+    {
+        .name = "kill",
+        .data = _binary_kill_elf_start,
+        .size = 0
+    },
+    {
+        .name = "ifconfig",
+        .data = _binary_ifconfig_elf_start,
+        .size = 0
+    },
+    {
+        .name = "netstat",
+        .data = _binary_netstat_elf_start,
+        .size = 0
+    },
+    {
+        .name = "sh",
+        .data = _binary_sh_elf_start,
+        .size = 0
+    },
     { NULL, NULL, 0 }
 };
 
@@ -225,6 +302,28 @@ static uint64_t program_size(const uint8_t *data) {
         return (uint64_t)(_binary_mmap_test_elf_end - _binary_mmap_test_elf_start);
     if (data == _binary_epoll_test_elf_start)
         return (uint64_t)(_binary_epoll_test_elf_end - _binary_epoll_test_elf_start);
+    if (data == _binary_cp_elf_start)
+        return (uint64_t)(_binary_cp_elf_end - _binary_cp_elf_start);
+    if (data == _binary_mv_elf_start)
+        return (uint64_t)(_binary_mv_elf_end - _binary_mv_elf_start);
+    if (data == _binary_df_elf_start)
+        return (uint64_t)(_binary_df_elf_end - _binary_df_elf_start);
+    if (data == _binary_grep_elf_start)
+        return (uint64_t)(_binary_grep_elf_end - _binary_grep_elf_start);
+    if (data == _binary_head_elf_start)
+        return (uint64_t)(_binary_head_elf_end - _binary_head_elf_start);
+    if (data == _binary_tail_elf_start)
+        return (uint64_t)(_binary_tail_elf_end - _binary_tail_elf_start);
+    if (data == _binary_top_elf_start)
+        return (uint64_t)(_binary_top_elf_end - _binary_top_elf_start);
+    if (data == _binary_kill_elf_start)
+        return (uint64_t)(_binary_kill_elf_end - _binary_kill_elf_start);
+    if (data == _binary_ifconfig_elf_start)
+        return (uint64_t)(_binary_ifconfig_elf_end - _binary_ifconfig_elf_start);
+    if (data == _binary_netstat_elf_start)
+        return (uint64_t)(_binary_netstat_elf_end - _binary_netstat_elf_start);
+    if (data == _binary_sh_elf_start)
+        return (uint64_t)(_binary_sh_elf_end - _binary_sh_elf_start);
     return 0;
 }
 

@@ -91,3 +91,11 @@ uint64_t vmm_get_physical(uint64_t virt) {
         return 0;
     return (*pte & PTE_ADDR_MASK) | (virt & 0xFFF);
 }
+
+void vmm_map_range(uint64_t phys_base, uint64_t virt_base, uint64_t n_pages, uint64_t flags) {
+    for (uint64_t i = 0; i < n_pages; i++) {
+        vmm_map_page(virt_base + i * PAGE_SIZE,
+                     phys_base + i * PAGE_SIZE,
+                     flags);
+    }
+}

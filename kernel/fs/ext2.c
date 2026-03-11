@@ -830,3 +830,74 @@ int ext2_unlink(uint32_t parent_ino, const char *name) {
     debug_printf("ext2: unlinked '%s' inode=%u\n", name, (uint64_t)ino);
     return 0;
 }
+
+/* Split path into parent directory and basename */
+static void ext2_path_split(const char *path, char *parent, char *name) {
+    int len = 0;
+    while (path[len]) len++;
+    int slash = -1;
+    for (int i = len - 1; i >= 0; i--) {
+        if (path[i] == '/') { slash = i; break; }
+    }
+    if (slash <= 0) {
+        parent[0] = '/'; parent[1] = '\0';
+        strncpy(name, path + (slash + 1), 127);
+        name[127] = '\0';
+    } else {
+        int plen = slash < 127 ? slash : 127;
+        strncpy(parent, path, (size_t)plen);
+        parent[plen] = '\0';
+        strncpy(name, path + slash + 1, 127);
+        name[127] = '\0';
+    }
+}
+
+int ext2_rename(const char *old_path, const char *new_path) {
+    if (!ext2_mounted) return -1;
+
+    uint32_t old_ino = ext2_path_lookup(old_path);
+    if (!old_ino) return -1;
+
+    char old_parent[128], old_name[128];
+    char new_parent[128], new_name[128];
+    ext2_path_split(old_path, old_parent, old_name);
+    ext2_path_split(new_path, new_parent, new_name);
+
+    uint32_t old_dir_ino = ext2_path_lookup(old_parent);
+    uint32_t new_dir_ino = ext2_path_lookup(new_parent);
+    if (!old_dir_ino || !new_dir_ino) return -1;
+
+    struct ext2_inode old_inode;
+    if (ext2_read_inode(old_ino, &old_inode) != 0) return -1;
+    uint8_t ftype = (old_inode.i_mode & EXT2_S_IFDIR) ? EXT2_FT_DIR : EXT2_FT_REG_FILE;
+
+    /* Remove existing destination if present */
+    uint32_t dst_ino = ext2_lookup(new_dir_ino, new_name);
+    if (dst_ino) {
+        ext2_unlink(new_dir_ino, new_name);
+    }
+
+    /* Add entry in new location pointing to old inode */
+    if (ext2_add_dir_entry(new_dir_ino, old_ino, new_name, ftype) < 0)
+        return -1;
+
+    /* Remove old directory entry */
+    if (ext2_remove_dir_entry(old_dir_ino, old_name) < 0) {
+        ext2_remove_dir_entry(new_dir_ino, new_name);
+        return -1;
+    }
+
+    ext2_flush_metadata();
+    debug_printf("ext2: renamed '%s' -> '%s'\n", old_path, new_path);
+    return 0;
+}
+
+int ext2_get_stats(struct ext2_stats *stats) {
+    if (!ext2_mounted || !stats) return -1;
+    stats->total_blocks = sb.s_blocks_count;
+    stats->free_blocks  = sb.s_free_blocks_count;
+    stats->total_inodes = sb.s_inodes_count;
+    stats->free_inodes  = sb.s_free_inodes_count;
+    stats->block_size   = block_size;
+    return 0;
+}

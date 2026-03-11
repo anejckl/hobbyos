@@ -140,4 +140,18 @@ uint32_t ext2_mkdir(uint32_t parent_ino, const char *name);
  * Returns 0 on success, -1 on failure. */
 int ext2_unlink(uint32_t parent_ino, const char *name);
 
+/* Rename a file or directory. Returns 0 on success, -1 on failure. */
+int ext2_rename(const char *old_path, const char *new_path);
+
+struct ext2_stats {
+    uint32_t total_blocks;
+    uint32_t free_blocks;
+    uint32_t total_inodes;
+    uint32_t free_inodes;
+    uint32_t block_size;
+};
+
+/* Get filesystem statistics. Returns 0 on success, -1 on failure. */
+int ext2_get_stats(struct ext2_stats *stats);
+
 #endif /* EXT2_H */

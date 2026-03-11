@@ -2,6 +2,8 @@
 #include "../arch/x86_64/isr.h"
 #include "../arch/x86_64/fork_return.h"
 #include "../drivers/vga.h"
+#include "../drivers/pit.h"
+#include "../drivers/fb.h"
 #include "../scheduler/scheduler.h"
 #include "../process/process.h"
 #include "../process/user_process.h"
@@ -607,6 +609,19 @@ static uint64_t syscall_mmap(uint64_t args_ptr) {
         struct process_fd *pfd = &proc->fd_table[args.fd];
         if (pfd->type == FD_EXT2) {
             vma->file_inode = (uint32_t)(uint64_t)pfd->data;
+        } else if (pfd->type == FD_DEVICE) {
+            struct device *dev = (struct device *)pfd->data;
+            if (!dev) { vma->in_use = false; return (uint64_t)-1; }
+            /* Only support /dev/fb0 device mmap */
+            if (fb_is_initialized()) {
+                vma->type = VMA_DEVICE;
+                vma->dev_phys_base = fb_get_phys_addr() + args.offset;
+                vma->file_inode = 0;
+                vma->file_offset = 0;
+            } else {
+                vma->in_use = false;
+                return (uint64_t)-1;
+            }
         } else {
             vma->in_use = false;
             return (uint64_t)-1;
@@ -758,6 +773,111 @@ static uint64_t syscall_epoll_wait(uint64_t epfd, uint64_t args_ptr) {
         }
     }
     return (uint64_t)found;
+}
+
+/* SYS_LSEEK (34): lseek(fd, offset, whence) */
+__attribute__((noinline))
+static int64_t syscall_lseek(uint64_t fd, int64_t offset, int whence) {
+    struct process *cur = scheduler_get_current();
+    if (fd >= PROCESS_MAX_FDS) return -1;
+    struct process_fd *pfd = &cur->fd_table[fd];
+
+    if (pfd->type == FD_EXT2) {
+        struct ext2_inode inode;
+        uint32_t ino = (uint32_t)(uint64_t)pfd->data;
+        if (ext2_read_inode(ino, &inode) != 0) return -1;
+        uint64_t file_size = inode.i_size;
+        uint64_t new_off;
+        if (whence == 0 /* SEEK_SET */) {
+            if (offset < 0) return -1;
+            new_off = (uint64_t)offset;
+        } else if (whence == 1 /* SEEK_CUR */) {
+            new_off = (uint64_t)((int64_t)pfd->offset + offset);
+        } else if (whence == 2 /* SEEK_END */) {
+            new_off = (uint64_t)((int64_t)file_size + offset);
+        } else {
+            return -1;
+        }
+        pfd->offset = new_off;
+        return (int64_t)new_off;
+    } else if (pfd->type == FD_VFS) {
+        uint64_t new_off;
+        if (whence == 0) {
+            if (offset < 0) return -1;
+            new_off = (uint64_t)offset;
+        } else if (whence == 1) {
+            new_off = (uint64_t)((int64_t)pfd->offset + offset);
+        } else {
+            return -1;
+        }
+        pfd->offset = new_off;
+        return (int64_t)new_off;
+    }
+    return -1;
+}
+
+/* SYS_RENAME (35): rename(oldpath, newpath) */
+__attribute__((noinline))
+static int64_t syscall_rename(uint64_t arg1, uint64_t arg2) {
+    const char *old_path = (const char *)arg1;
+    const char *new_path = (const char *)arg2;
+
+    if ((uint64_t)old_path >= KERNEL_VMA || (uint64_t)new_path >= KERNEL_VMA)
+        return -1;
+
+    if (!ext2_is_mounted())
+        return -1;
+
+    char old_buf[128], new_buf[128];
+    strncpy(old_buf, old_path, sizeof(old_buf) - 1);
+    old_buf[sizeof(old_buf)-1] = '\0';
+    strncpy(new_buf, new_path, sizeof(new_buf) - 1);
+    new_buf[sizeof(new_buf)-1] = '\0';
+
+    return (int64_t)ext2_rename(old_buf, new_buf);
+}
+
+/* SYS_GETTIME (36): gettime() -> ms since boot */
+__attribute__((noinline))
+static uint64_t syscall_gettime(void) {
+    return pit_get_ticks() * 10; /* 100 Hz -> 10 ms per tick */
+}
+
+/* SYS_IOCTL (37): ioctl(fd, cmd, arg) */
+__attribute__((noinline))
+static int64_t syscall_ioctl_handler(uint64_t fd, uint64_t cmd, uint64_t arg) {
+    struct process *cur = scheduler_get_current();
+    if (fd >= PROCESS_MAX_FDS) return -1;
+    struct process_fd *pfd = &cur->fd_table[fd];
+
+    if (pfd->type == FD_DEVICE) {
+        struct device *dev = (struct device *)pfd->data;
+        if (!dev || !dev->ioctl) return -1;
+        return (int64_t)dev->ioctl(dev, (uint32_t)cmd, arg);
+    }
+    return -1;
+}
+
+/* SYS_SEND (38): send(fd, buf, len, flags) */
+__attribute__((noinline))
+static int64_t syscall_send(uint64_t fd, uint64_t buf_ptr, uint64_t len, uint64_t flags) {
+    (void)flags;
+    struct process *cur = scheduler_get_current();
+    if (fd >= PROCESS_MAX_FDS) return -1;
+    if (cur->fd_table[fd].type != FD_SOCKET) return -1;
+    int sock_idx = (int)(uint64_t)cur->fd_table[fd].data;
+    return (int64_t)socket_send(sock_idx, (const uint8_t *)buf_ptr, (uint32_t)len);
+}
+
+/* SYS_RECV (39): recv(fd, buf, len, flags) */
+__attribute__((noinline))
+static int64_t syscall_recv(uint64_t fd, uint64_t buf_ptr, uint64_t len, uint64_t flags) {
+    (void)flags;
+    struct process *cur = scheduler_get_current();
+    if (fd >= PROCESS_MAX_FDS) return -1;
+    if (cur->fd_table[fd].type != FD_SOCKET) return -1;
+    int sock_idx = (int)(uint64_t)cur->fd_table[fd].data;
+    return (int64_t)socket_recv(sock_idx, (uint8_t *)buf_ptr, (uint32_t)len);
 }
 
 /* Syscall handler for INT 0x80 */
@@ -1847,6 +1967,30 @@ static void syscall_handler(struct interrupt_frame *frame) {
 
     case SYS_EPOLL_WAIT:
         frame->rax = syscall_epoll_wait(arg1, arg2);
+        return;
+
+    case SYS_LSEEK:
+        frame->rax = (uint64_t)syscall_lseek(arg1, (int64_t)arg2, (int)arg3);
+        return;
+
+    case SYS_RENAME:
+        frame->rax = (uint64_t)syscall_rename(arg1, arg2);
+        return;
+
+    case SYS_GETTIME:
+        frame->rax = syscall_gettime();
+        return;
+
+    case SYS_IOCTL:
+        frame->rax = (uint64_t)syscall_ioctl_handler(arg1, arg2, arg3);
+        return;
+
+    case SYS_SEND:
+        frame->rax = (uint64_t)syscall_send(arg1, arg2, arg3, frame->r10);
+        return;
+
+    case SYS_RECV:
+        frame->rax = (uint64_t)syscall_recv(arg1, arg2, arg3, frame->r10);
         return;
 
     default:

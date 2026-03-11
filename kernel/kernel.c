@@ -3,6 +3,8 @@
 #include "drivers/vga.h"
 #include "drivers/keyboard.h"
 #include "drivers/pit.h"
+#include "drivers/fb.h"
+#include "drivers/mouse.h"
 #include "arch/x86_64/gdt.h"
 #include "arch/x86_64/idt.h"
 #include "arch/x86_64/pic.h"
@@ -65,6 +67,9 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
     }
     vga_printf("[OK] Multiboot2 verified (info at 0x%x)\n", (uint64_t)multiboot_info_phys);
     debug_printf("Multiboot2 info at physical 0x%x\n", (uint64_t)multiboot_info_phys);
+
+    /* Save MB2 info pointer for later FB parsing (after VMM/heap ready) */
+    uint32_t mb2_info_phys = multiboot_info_phys;
 
     /* Phase 2: GDT + TSS */
     gdt_init();
@@ -146,6 +151,43 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
     dev_tty_init();
     devfs_init();
     vga_printf("[OK] Device framework initialized (/dev)\n");
+
+    /* Parse Multiboot2 tags for framebuffer */
+    {
+        uint8_t *mb2 = (uint8_t *)PHYS_TO_VIRT((uint64_t)mb2_info_phys);
+        uint32_t total_size = *(uint32_t *)mb2;
+        uint8_t *tag = mb2 + 8;
+        uint8_t *end = mb2 + total_size;
+
+        while (tag < end) {
+            uint32_t tag_type = *(uint32_t *)tag;
+            uint32_t tag_size = *(uint32_t *)(tag + 4);
+            if (tag_type == 0) break; /* end tag */
+
+            if (tag_type == 8) {
+                /* Framebuffer tag */
+                uint64_t fb_addr  = *(uint64_t *)(tag + 8);
+                uint32_t fb_pitch = *(uint32_t *)(tag + 16);
+                uint32_t fb_w     = *(uint32_t *)(tag + 20);
+                uint32_t fb_h     = *(uint32_t *)(tag + 24);
+                uint8_t  fb_bpp   = *(uint8_t  *)(tag + 28);
+                uint8_t  fb_type  = *(uint8_t  *)(tag + 29);
+
+                if (fb_type == 1 && fb_bpp == 32) {  /* RGB, 32bpp */
+                    fb_init(fb_addr, fb_w, fb_h, fb_pitch, fb_bpp);
+                    vga_printf("[OK] Framebuffer: %ux%u bpp=%u\n",
+                               (uint64_t)fb_w, (uint64_t)fb_h, (uint64_t)fb_bpp);
+                }
+            }
+
+            /* Tags are aligned to 8 bytes */
+            tag += (tag_size + 7) & ~7U;
+        }
+    }
+
+    /* PS/2 mouse */
+    mouse_init();
+    vga_printf("[OK] PS/2 mouse initialized\n");
 
     /* ATA disk driver */
     ata_init();

@@ -81,6 +81,17 @@ int vma_handle_fault(struct process *proc, uint64_t fault_addr, bool is_write) {
     if (!phys) return -1;
     memset((void *)PHYS_TO_VIRT(phys), 0, PAGE_SIZE);
 
+    /* Device-backed: map physical device pages directly */
+    if (vma->type == VMA_DEVICE) {
+        uint64_t page_offset = page - vma->start;
+        uint64_t dev_phys = vma->dev_phys_base + page_offset;
+        uint64_t dflags = PTE_PRESENT | PTE_USER | PTE_NOCACHE;
+        if (vma->prot & PROT_WRITE) dflags |= PTE_WRITABLE;
+        /* Free the fresh page we allocated above since we won't use it */
+        pmm_page_unref(phys);
+        return user_vm_map_page(proc->cr3, page, dev_phys, dflags);
+    }
+
     /* File-backed: read file data into page */
     if (vma->type == VMA_FILE) {
         struct ext2_inode inode;
