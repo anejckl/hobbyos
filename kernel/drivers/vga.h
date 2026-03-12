@@ -40,4 +40,9 @@ void vga_backspace(void);
 uint16_t vga_get_row(void);
 uint16_t vga_get_col(void);
 
+/* Framebuffer console: render text to framebuffer when active */
+void vga_enable_fb_console(void);
+void vga_disable_fb_console(void);
+void vga_repaint_fb_console(void);
+
 #endif /* VGA_H */

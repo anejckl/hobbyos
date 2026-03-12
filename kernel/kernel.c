@@ -191,6 +191,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
 
                 if (fb_type == 1 && fb_bpp == 32) {  /* RGB, 32bpp */
                     fb_init(fb_addr, fb_w, fb_h, fb_pitch, fb_bpp);
+                    vga_enable_fb_console();
                     vga_printf("[OK] Framebuffer: %ux%u bpp=%u\n",
                                (uint64_t)fb_w, (uint64_t)fb_h, (uint64_t)fb_bpp);
                 }

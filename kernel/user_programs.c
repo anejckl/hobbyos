@@ -73,6 +73,18 @@ extern const uint8_t _binary_netstat_elf_start[];
 extern const uint8_t _binary_netstat_elf_end[];
 extern const uint8_t _binary_sh_elf_start[];
 extern const uint8_t _binary_sh_elf_end[];
+extern const uint8_t _binary_id_elf_start[];
+extern const uint8_t _binary_id_elf_end[];
+extern const uint8_t _binary_whoami_elf_start[];
+extern const uint8_t _binary_whoami_elf_end[];
+extern const uint8_t _binary_demand_test_elf_start[];
+extern const uint8_t _binary_demand_test_elf_end[];
+extern const uint8_t _binary_perm_test_elf_start[];
+extern const uint8_t _binary_perm_test_elf_end[];
+extern const uint8_t _binary_nonblock_test_elf_start[];
+extern const uint8_t _binary_nonblock_test_elf_end[];
+extern const uint8_t _binary_wm_elf_start[];
+extern const uint8_t _binary_wm_elf_end[];
 
 static const struct user_program programs[] = {
     {
@@ -250,6 +262,36 @@ static const struct user_program programs[] = {
         .data = _binary_sh_elf_start,
         .size = 0
     },
+    {
+        .name = "id",
+        .data = _binary_id_elf_start,
+        .size = 0
+    },
+    {
+        .name = "whoami",
+        .data = _binary_whoami_elf_start,
+        .size = 0
+    },
+    {
+        .name = "demand_test",
+        .data = _binary_demand_test_elf_start,
+        .size = 0
+    },
+    {
+        .name = "perm_test",
+        .data = _binary_perm_test_elf_start,
+        .size = 0
+    },
+    {
+        .name = "nonblock_test",
+        .data = _binary_nonblock_test_elf_start,
+        .size = 0
+    },
+    {
+        .name = "wm",
+        .data = _binary_wm_elf_start,
+        .size = 0
+    },
     { NULL, NULL, 0 }
 };
 
@@ -324,6 +366,18 @@ static uint64_t program_size(const uint8_t *data) {
         return (uint64_t)(_binary_netstat_elf_end - _binary_netstat_elf_start);
     if (data == _binary_sh_elf_start)
         return (uint64_t)(_binary_sh_elf_end - _binary_sh_elf_start);
+    if (data == _binary_id_elf_start)
+        return (uint64_t)(_binary_id_elf_end - _binary_id_elf_start);
+    if (data == _binary_whoami_elf_start)
+        return (uint64_t)(_binary_whoami_elf_end - _binary_whoami_elf_start);
+    if (data == _binary_demand_test_elf_start)
+        return (uint64_t)(_binary_demand_test_elf_end - _binary_demand_test_elf_start);
+    if (data == _binary_perm_test_elf_start)
+        return (uint64_t)(_binary_perm_test_elf_end - _binary_perm_test_elf_start);
+    if (data == _binary_nonblock_test_elf_start)
+        return (uint64_t)(_binary_nonblock_test_elf_end - _binary_nonblock_test_elf_start);
+    if (data == _binary_wm_elf_start)
+        return (uint64_t)(_binary_wm_elf_end - _binary_wm_elf_start);
     return 0;
 }
 

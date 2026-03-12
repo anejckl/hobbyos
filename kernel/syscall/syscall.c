@@ -921,8 +921,13 @@ static int64_t syscall_ioctl_handler(uint64_t fd, uint64_t cmd, uint64_t arg) {
 
     if (pfd->type == FD_DEVICE) {
         struct device *dev = (struct device *)pfd->data;
-        if (!dev || !dev->ioctl) return -1;
-        return (int64_t)dev->ioctl(dev, (uint32_t)cmd, arg);
+        if (!dev) return -1;
+        /* Check both legacy ioctl and extended ops->ioctl */
+        if (dev->ioctl)
+            return (int64_t)dev->ioctl(dev, (uint32_t)cmd, arg);
+        if (dev->ops && dev->ops->ioctl)
+            return (int64_t)dev->ops->ioctl(dev, (uint32_t)cmd, arg);
+        return -1;
     }
     return -1;
 }

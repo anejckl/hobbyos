@@ -66,6 +66,7 @@ static void cmd_ping(int argc, char **argv);
 static void cmd_ifconfig(int argc, char **argv);
 static void cmd_arp(int argc, char **argv);
 static void cmd_sync(int argc, char **argv);
+static void cmd_startx(int argc, char **argv);
 
 static struct command commands[] = {
     {"help",   "Show available commands",     cmd_help},
@@ -86,6 +87,7 @@ static struct command commands[] = {
     {"ifconfig","Show network config",        cmd_ifconfig},
     {"arp",    "Show ARP table",              cmd_arp},
     {"sync",   "Flush caches to disk",       cmd_sync},
+    {"startx", "Start window manager",       cmd_startx},
     {NULL, NULL, NULL}
 };
 
@@ -688,6 +690,15 @@ static void cmd_sync(int argc, char **argv) {
     bcache_sync();
     pagecache_sync();
     vga_printf("Done.\n");
+}
+
+static void cmd_startx(int argc, char **argv) {
+    (void)argc; (void)argv;
+    /* Run wm as a foreground process */
+    char *run_argv[] = {"run", "wm", NULL};
+    cmd_run(2, run_argv);
+    /* WM overwrote the framebuffer — repaint the text console */
+    vga_repaint_fb_console();
 }
 
 static void shell_readline(char *buf, size_t size) {

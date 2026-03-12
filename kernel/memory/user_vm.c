@@ -36,10 +36,11 @@ uint64_t user_vm_create_address_space(void) {
     uint64_t boot_cr3 = read_cr3();
     uint64_t *boot_pml4 = (uint64_t *)PHYS_TO_VIRT(boot_cr3 & PTE_ADDR_MASK);
 
-    /* PML4[256] = physical memory direct map (PHYS_MAP_BASE) */
-    new_pml4[256] = boot_pml4[256];
-    /* PML4[511] = kernel code/data (KERNEL_VMA) */
-    new_pml4[511] = boot_pml4[511];
+    /* Copy all kernel-half PML4 entries (256-511) from boot tables.
+     * This covers: physical direct map (256), framebuffer (510),
+     * kernel code/data/heap (511), and any future kernel mappings. */
+    for (int i = 256; i < 512; i++)
+        new_pml4[i] = boot_pml4[i];
 
     debug_printf("user_vm: created address space PML4=0x%x\n", pml4_phys);
     return pml4_phys;

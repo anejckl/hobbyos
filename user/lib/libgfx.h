@@ -30,6 +30,8 @@ struct fb_info {
     uint64_t phys_addr;
 } __attribute__((packed));
 
+typedef signed long long int64_t;
+
 int  gfx_init(gfx_ctx_t *ctx);
 void gfx_fini(gfx_ctx_t *ctx);
 void gfx_clear(gfx_ctx_t *ctx, uint32_t color);
@@ -40,5 +42,14 @@ void gfx_draw_char(gfx_ctx_t *ctx, int x, int y, char c, uint32_t fg, uint32_t b
 void gfx_draw_string(gfx_ctx_t *ctx, int x, int y, const char *s, uint32_t fg, uint32_t bg);
 gfx_surface_t *gfx_surface_create(uint32_t w, uint32_t h);
 void gfx_blit(gfx_ctx_t *ctx, gfx_surface_t *src, int dst_x, int dst_y);
+
+/* Surface-targeted drawing functions */
+void gfx_surface_clear(gfx_surface_t *s, uint32_t color);
+void gfx_surface_put_pixel(gfx_surface_t *s, int x, int y, uint32_t color);
+void gfx_surface_fill_rect(gfx_surface_t *s, int x, int y, int w, int h, uint32_t color);
+void gfx_surface_draw_char(gfx_surface_t *s, int x, int y, char c, uint32_t fg, uint32_t bg);
+void gfx_surface_draw_string(gfx_surface_t *s, int x, int y, const char *str, uint32_t fg, uint32_t bg);
+void gfx_surface_blit(gfx_surface_t *dst, gfx_surface_t *src, int x, int y);
+void gfx_surface_blit_to_ctx(gfx_ctx_t *ctx, gfx_surface_t *src, int dst_x, int dst_y);
 
 #endif /* LIBGFX_H */

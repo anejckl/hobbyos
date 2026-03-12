@@ -109,8 +109,16 @@ static void keyboard_handler(struct interrupt_frame *frame) {
         }
     }
 
-    if (c != 0)
+    if (c != 0) {
         tty_input_char(c);
+
+        /* Also write to raw buffer for /dev/input/keyboard */
+        uint32_t next = (kb_write_idx + 1) % KB_BUFFER_SIZE;
+        if (next != kb_read_idx) {
+            kb_buffer[kb_write_idx] = c;
+            kb_write_idx = next;
+        }
+    }
 }
 
 void keyboard_init(void) {

@@ -9,7 +9,17 @@ multiboot_header_start:
     dd multiboot_header_end - multiboot_header_start  ; Header length
     dd -(0xE85250D6 + 0 + (multiboot_header_end - multiboot_header_start))  ; Checksum
 
-    ; End tag
+    ; Framebuffer tag: request 1024x768x32bpp (optional)
+    align 8
+    dw 5            ; type = framebuffer
+    dw 1            ; flags = 1 (optional — boot even without fb)
+    dd 20           ; size
+    dd 1024         ; width
+    dd 768          ; height
+    dd 32           ; depth
+
+    ; End tag (must be 8-byte aligned)
+    align 8
     dw 0    ; type
     dw 0    ; flags
     dd 8    ; size

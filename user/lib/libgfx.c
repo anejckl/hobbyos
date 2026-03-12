@@ -54,7 +54,7 @@ static void *_mmap(void *addr, uint64_t len, uint32_t prot, uint32_t flags,
 }
 
 /* Simple malloc using brk — just allocate from static pool */
-static uint8_t gfx_heap[4 * 1024 * 1024];  /* 4 MB static pool */
+static uint8_t gfx_heap[8 * 1024 * 1024];  /* 8 MB static pool */
 static uint64_t gfx_heap_ptr = 0;
 
 static void *gfx_malloc(uint64_t size) {
@@ -255,7 +255,7 @@ void gfx_draw_char(gfx_ctx_t *ctx, int x, int y, char c, uint32_t fg, uint32_t b
     for (int row = 0; row < 8; row++) {
         uint8_t bits = glyph[row];
         for (int col = 0; col < 8; col++) {
-            uint32_t color = (bits & (0x80 >> col)) ? fg : bg;
+            uint32_t color = (bits & (1 << col)) ? fg : bg;
             gfx_put_pixel(ctx, x + col, y + row, color);
         }
     }
@@ -294,6 +294,95 @@ void gfx_blit(gfx_ctx_t *ctx, gfx_surface_t *src, int dst_x, int dst_y) {
             uint32_t *dst_row = (uint32_t *)((uint8_t *)ctx->pixels +
                                               (uint64_t)py * ctx->pitch);
             dst_row[px] = src->data[row * src->width + col];
+        }
+    }
+}
+
+/* ---- Surface-targeted drawing functions ---- */
+
+void gfx_surface_clear(gfx_surface_t *s, uint32_t color) {
+    if (!s || !s->data) return;
+    uint64_t pattern = ((uint64_t)color << 32) | color;
+    uint64_t *dst = (uint64_t *)s->data;
+    uint64_t words = (uint64_t)s->width * s->height / 2;
+    for (uint64_t i = 0; i < words; i++)
+        dst[i] = pattern;
+    /* Handle odd pixel count */
+    if ((uint64_t)s->width * s->height & 1)
+        s->data[(uint64_t)s->width * s->height - 1] = color;
+}
+
+void gfx_surface_put_pixel(gfx_surface_t *s, int x, int y, uint32_t color) {
+    if (!s || !s->data) return;
+    if (x < 0 || y < 0 || (uint32_t)x >= s->width || (uint32_t)y >= s->height) return;
+    s->data[(uint64_t)y * s->width + x] = color;
+}
+
+void gfx_surface_fill_rect(gfx_surface_t *s, int x, int y, int w, int h, uint32_t color) {
+    if (!s || !s->data) return;
+    int x1 = x, y1 = y, x2 = x + w, y2 = y + h;
+    if (x1 < 0) x1 = 0;
+    if (y1 < 0) y1 = 0;
+    if (x2 > (int)s->width)  x2 = (int)s->width;
+    if (y2 > (int)s->height) y2 = (int)s->height;
+    for (int py = y1; py < y2; py++) {
+        uint32_t *row = &s->data[(uint64_t)py * s->width];
+        for (int px = x1; px < x2; px++)
+            row[px] = color;
+    }
+}
+
+void gfx_surface_draw_char(gfx_surface_t *s, int x, int y, char c, uint32_t fg, uint32_t bg) {
+    if (!s) return;
+    int idx = (int)(unsigned char)c - 0x20;
+    if (idx < 0 || idx >= 95) idx = 0;
+    const uint8_t *glyph = font8x8[idx];
+    for (int row = 0; row < 8; row++) {
+        uint8_t bits = glyph[row];
+        for (int col = 0; col < 8; col++) {
+            uint32_t color = (bits & (1 << col)) ? fg : bg;
+            gfx_surface_put_pixel(s, x + col, y + row, color);
+        }
+    }
+}
+
+void gfx_surface_draw_string(gfx_surface_t *s, int x, int y, const char *str,
+                              uint32_t fg, uint32_t bg) {
+    if (!s || !str) return;
+    int cx = x;
+    for (; *str; str++) {
+        if (*str == '\n') { cx = x; y += 9; continue; }
+        gfx_surface_draw_char(s, cx, y, *str, fg, bg);
+        cx += 8;
+        if ((uint32_t)cx + 8 > s->width) { cx = x; y += 9; }
+    }
+}
+
+void gfx_surface_blit(gfx_surface_t *dst, gfx_surface_t *src, int dx, int dy) {
+    if (!dst || !src) return;
+    for (uint32_t row = 0; row < src->height; row++) {
+        int py = dy + (int)row;
+        if (py < 0 || (uint32_t)py >= dst->height) continue;
+        for (uint32_t col = 0; col < src->width; col++) {
+            int px = dx + (int)col;
+            if (px < 0 || (uint32_t)px >= dst->width) continue;
+            dst->data[(uint64_t)py * dst->width + px] =
+                src->data[(uint64_t)row * src->width + col];
+        }
+    }
+}
+
+void gfx_surface_blit_to_ctx(gfx_ctx_t *ctx, gfx_surface_t *src, int dst_x, int dst_y) {
+    if (!ctx || !src) return;
+    for (uint32_t row = 0; row < src->height; row++) {
+        int py = dst_y + (int)row;
+        if (py < 0 || (uint32_t)py >= ctx->height) continue;
+        uint32_t *dst_row = (uint32_t *)((uint8_t *)ctx->pixels +
+                                          (uint64_t)py * ctx->pitch);
+        for (uint32_t col = 0; col < src->width; col++) {
+            int px = dst_x + (int)col;
+            if (px < 0 || (uint32_t)px >= ctx->width) continue;
+            dst_row[px] = src->data[(uint64_t)row * src->width + col];
         }
     }
 }
