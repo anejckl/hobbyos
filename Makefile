@@ -88,7 +88,16 @@ C_SRCS = kernel/kernel.c \
          kernel/fs/epoll.c \
          kernel/fs/poll.c \
          kernel/drivers/fb.c \
-         kernel/drivers/mouse.c
+         kernel/drivers/mouse.c \
+         kernel/drivers/driver_model.c \
+         kernel/drivers/dev_random.c \
+         kernel/drivers/dev_input.c \
+         kernel/drivers/blockcache.c \
+         kernel/security/cred.c \
+         kernel/memory/rmap.c \
+         kernel/memory/swap.c \
+         kernel/memory/pagecache.c \
+         kernel/fs/journal.c
 
 # Object files
 ASM_OBJS = $(ASM_SRCS:.asm=.o)
@@ -96,7 +105,7 @@ C_OBJS = $(C_SRCS:.c=.o)
 C_DEPS = $(C_OBJS:.o=.d)
 
 # User program embedded objects
-USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm net_test nc httpd ping exec_test waitpid_test argv_test fork_exec_test mmap_test epoll_test cp mv df grep head tail top kill ifconfig netstat sh
+USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm net_test nc httpd ping exec_test waitpid_test argv_test fork_exec_test mmap_test epoll_test cp mv df grep head tail top kill ifconfig netstat sh id whoami demand_test perm_test nonblock_test
 USER_EMBED_OBJS = $(patsubst %,user/%_embed.o,$(USER_PROGRAMS))
 
 OBJS = $(ASM_OBJS) $(C_OBJS) $(USER_EMBED_OBJS)
@@ -187,7 +196,7 @@ debug: iso
 
 # Host-side unit tests (fast, no QEMU needed)
 test-host:
-	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_refcount.c tests/test_printf.c tests/test_elf.c tests/test_vfs.c tests/test_pipe.c tests/test_signal.c tests/test_netbuf.c tests/test_checksum.c -Itests -Wall -Wextra
+	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_refcount.c tests/test_printf.c tests/test_elf.c tests/test_vfs.c tests/test_pipe.c tests/test_signal.c tests/test_netbuf.c tests/test_checksum.c tests/test_device.c tests/test_cred.c tests/test_bcache.c tests/test_swap.c tests/test_journal.c -Itests -Wall -Wextra
 	./tests/run_tests
 
 # QEMU smoke test (boots kernel, checks serial output)
@@ -207,11 +216,9 @@ test-native:
 	@echo "=== Native QEMU Interactive Tests ==="
 	@echo "Using native Windows QEMU with TCP serial..."
 	@test -f hobbyos.iso || (echo "ERROR: hobbyos.iso not found. Build with Docker first." && exit 1)
-	@if [ ! -f disk.img ]; then \
-		echo "Creating fresh ext2 disk image via Docker..."; \
-		dd if=/dev/zero of=disk.img bs=1M count=16 2>/dev/null; \
-		MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test mkfs.ext2 -F disk.img >/dev/null 2>&1; \
-	fi
+	@echo "Creating fresh ext2 disk image via Docker..."
+	@dd if=/dev/zero of=disk.img bs=1M count=16 2>/dev/null
+	@MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test mkfs.ext2 -F disk.img >/dev/null 2>&1
 	python3 tests/test_interactive.py --native
 
 # Run all tests
@@ -227,7 +234,7 @@ clean:
 	rm -f $(OBJS) $(C_DEPS) $(KERNEL_BIN) $(ISO) tests/run_tests tests/serial_output.log tests/interactive_serial.log tests/interactive_results.json
 	rm -f user/*.o user/*.elf user/*.bin user/*.so
 	rm -f user/lib/*.o user/lib/*.so
-	rm -f kernel/elf/*.o kernel/fs/*.o kernel/signal/*.o kernel/drivers/*.o kernel/net/*.o
+	rm -f kernel/elf/*.o kernel/fs/*.o kernel/signal/*.o kernel/drivers/*.o kernel/net/*.o kernel/security/*.o
 	find . -name '*.d' -delete 2>/dev/null || true
 	rm -rf $(ISO_DIR)
 

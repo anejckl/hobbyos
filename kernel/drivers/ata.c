@@ -1,5 +1,10 @@
 #include "ata.h"
+#include "device.h"
 #include "../debug/debug.h"
+
+/* Major/minor for disk/sda */
+#define ATA_MAJOR  8
+#define ATA_MINOR  0
 
 static bool primary_present = false;
 
@@ -28,6 +33,45 @@ static int ata_poll(void) {
     if (status & 0x20) return -1;  /* DF */
     return 0;
 }
+
+/* Block device read with offset (offset is in bytes, must be sector-aligned) */
+static int ata_dev_read(struct device *dev, uint8_t *buf, uint32_t count, uint64_t offset) {
+    (void)dev;
+    if (!primary_present) return -1;
+    if (offset % 512 != 0 || count % 512 != 0) return -1;
+
+    uint32_t lba = (uint32_t)(offset / 512);
+    uint32_t sectors = count / 512;
+    if (sectors == 0 || sectors > 256) return -1;
+
+    if (ata_read_sectors(lba, (uint8_t)(sectors & 0xFF), buf) < 0)
+        return -1;
+    return (int)count;
+}
+
+/* Block device write with offset (offset is in bytes, must be sector-aligned) */
+static int ata_dev_write(struct device *dev, const uint8_t *buf, uint32_t count, uint64_t offset) {
+    (void)dev;
+    if (!primary_present) return -1;
+    if (offset % 512 != 0 || count % 512 != 0) return -1;
+
+    uint32_t lba = (uint32_t)(offset / 512);
+    uint32_t sectors = count / 512;
+    if (sectors == 0 || sectors > 256) return -1;
+
+    if (ata_write_sectors(lba, (uint8_t)(sectors & 0xFF), buf) < 0)
+        return -1;
+    return (int)count;
+}
+
+static struct device_ops ata_dev_ops = {
+    .open  = NULL,
+    .close = NULL,
+    .read  = ata_dev_read,
+    .write = ata_dev_write,
+    .ioctl = NULL,
+    .mmap  = NULL,
+};
 
 void ata_init(void) {
     /* Select master drive */
@@ -80,6 +124,9 @@ void ata_init(void) {
 
     primary_present = true;
     debug_printf("ATA: primary disk detected\n");
+
+    /* Register /dev/disk/sda as a block device */
+    device_register_ex("disk/sda", DEV_BLOCK, ATA_MAJOR, ATA_MINOR, &ata_dev_ops);
 }
 
 bool ata_disk_present(void) {

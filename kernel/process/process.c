@@ -62,6 +62,12 @@ struct process *process_create(const char *name, void (*entry)(void)) {
     proc->brk_start   = 0;
     proc->brk_current = 0;
 
+    /* Initialize credentials (default to root, uid=0) */
+    proc->uid = 0;
+    proc->gid = 0;
+    proc->euid = 0;
+    proc->egid = 0;
+
     /* Initialize epoll state */
     proc->epoll_fd_idx      = -1;
     proc->epoll_timeout_ticks = 0;

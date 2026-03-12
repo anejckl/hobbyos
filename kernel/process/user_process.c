@@ -53,21 +53,36 @@ int user_process_create_args(const char *name, const uint8_t *data, uint64_t siz
         return -1;
     }
 
-    /* 3. Load ELF segments (allocate, copy, and map pages) */
-    if (elf_load(pml4_phys, data, size, 0, &elf_result) < 0) {
-        debug_printf("user_process: ELF load failed for '%s'\n", name);
+    /* 3. Create kernel process early so ELF demand paging stores VMAs on it */
+    struct process *proc = process_create(name, user_trampoline);
+    if (!proc) {
+        debug_printf("user_process: failed to create process\n");
         return -1;
     }
 
-    /* 4. Allocate user stack page */
+    /* Initialize mmap/brk/epoll fields before ELF load (demand paging needs vmas[]) */
+    proc->cr3 = pml4_phys;
+    proc->is_user = true;
+    proc->mmap_next    = MMAP_BASE;
+    proc->epoll_fd_idx = -1;
+
+    /* 4. Load ELF segments — VMAs go into proc->vmas[] */
+    if (elf_load(pml4_phys, data, size, 0, &elf_result, proc) < 0) {
+        debug_printf("user_process: ELF load failed for '%s'\n", name);
+        proc->state = PROCESS_TERMINATED;
+        return -1;
+    }
+
+    /* 5. Allocate user stack page */
     uint64_t stack_phys = pmm_alloc_page();
     if (!stack_phys) {
         debug_printf("user_process: failed to alloc stack page\n");
+        proc->state = PROCESS_TERMINATED;
         return -1;
     }
     memset(PHYS_TO_VIRT(stack_phys), 0, PAGE_SIZE);
 
-    /* 5. Parse args string into argc/argv */
+    /* 6. Parse args string into argc/argv */
     const char *kern_argv[UPCA_MAX_ARGS];
     int argc = 0;
     char args_buf[512];
@@ -91,22 +106,24 @@ int user_process_create_args(const char *name, const uint8_t *data, uint64_t siz
         }
     }
 
-    /* 6. Set up SysV stack layout (writes strings + pointers via PHYS_TO_VIRT) */
+    /* 7. Set up SysV stack layout (writes strings + pointers via PHYS_TO_VIRT) */
     uint64_t entry_rsp, entry_argv_ptr;
     if (elf_setup_stack(stack_phys, USER_STACK_BOTTOM, argc, kern_argv,
                         &elf_result, &entry_rsp, &entry_argv_ptr) < 0) {
         debug_printf("user_process: elf_setup_stack failed for '%s'\n", name);
+        proc->state = PROCESS_TERMINATED;
         return -1;
     }
 
-    /* 7. Map the stack page */
+    /* 8. Map the stack page */
     if (user_vm_map_page(pml4_phys, USER_STACK_BOTTOM,
                          stack_phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER) < 0) {
         debug_printf("user_process: failed to map stack page\n");
+        proc->state = PROCESS_TERMINATED;
         return -1;
     }
 
-    /* 7b. Map legacy argv page at USER_ARGV_ADDR for programs using get_argv() */
+    /* 8b. Map legacy argv page at USER_ARGV_ADDR for programs using get_argv() */
     if (args && args[0]) {
         uint64_t argv_phys = pmm_alloc_page();
         if (argv_phys) {
@@ -121,28 +138,15 @@ int user_process_create_args(const char *name, const uint8_t *data, uint64_t siz
         }
     }
 
-    /* 8. Create kernel process with trampoline entry */
-    struct process *proc = process_create(name, user_trampoline);
-    if (!proc) {
-        debug_printf("user_process: failed to create process\n");
-        return -1;
-    }
-
-    /* 9. Store user-mode info in PCB */
-    proc->cr3 = pml4_phys;
-    proc->is_user = true;
+    /* 9. Store remaining user-mode info in PCB */
     proc->user_program_data = data;
     proc->user_program_size = size;
     proc->ppid = ppid;
     proc->user_entry_rsp  = entry_rsp;
     proc->user_entry_argv = entry_argv_ptr;
     proc->user_entry_argc = argc;
-
-    /* Initialize mmap/brk/epoll fields */
-    proc->mmap_next    = MMAP_BASE;
     proc->brk_start    = elf_result.load_end;
     proc->brk_current  = elf_result.load_end;
-    proc->epoll_fd_idx = -1;
 
     /* 10. Add to scheduler */
     scheduler_add(proc);

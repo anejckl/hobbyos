@@ -36,5 +36,10 @@ void test_pipe_suite(void);
 void test_signal_suite(void);
 void test_netbuf_suite(void);
 void test_checksum_suite(void);
+void test_device_suite(void);
+void test_cred_suite(void);
+void test_bcache_suite(void);
+void test_swap_suite(void);
+void test_journal_suite(void);
 
 #endif /* TEST_MAIN_H */

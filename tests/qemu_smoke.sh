@@ -12,7 +12,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 ISO="$ROOT_DIR/hobbyos.iso"
 SERIAL_LOG="$SCRIPT_DIR/serial_output.log"
 EXPECTED="$SCRIPT_DIR/qemu_smoke.exp"
-TIMEOUT=45
+TIMEOUT=75
 
 # ---- Preflight checks ----
 

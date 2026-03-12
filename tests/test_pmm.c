@@ -27,6 +27,9 @@ static void vga_printf(const char *fmt, ...) __attribute__((unused));
 static void vga_printf(const char *fmt, ...) { (void)fmt; }
 static void debug_printf(const char *fmt, ...) { (void)fmt; }
 
+/* Stub swap_evict_one (pmm.c calls it when free pages < watermark) */
+int swap_evict_one(void) { return -1; }
+
 /* Linker symbol that pmm.c declares as extern char[] */
 char _kernel_phys_end[4096];
 

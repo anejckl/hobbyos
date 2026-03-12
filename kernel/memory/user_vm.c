@@ -1,7 +1,10 @@
 #include "user_vm.h"
 #include "pmm.h"
 #include "vmm.h"
+#include "rmap.h"
 #include "../string.h"
+#include "../scheduler/scheduler.h"
+#include "../process/process.h"
 #include "../debug/debug.h"
 
 /* Page table index extraction macros */
@@ -81,6 +84,13 @@ int user_vm_map_page(uint64_t pml4_phys, uint64_t virt, uint64_t phys, uint64_t 
     /* Set final PTE */
     uint64_t pt_idx = PT_INDEX(virt);
     pt[pt_idx] = (phys & PTE_ADDR_MASK) | flags | PTE_PRESENT;
+
+    /* Set reverse mapping for user-space pages (needed by swap eviction) */
+    if (virt < KERNEL_VMA) {
+        struct process *cur = scheduler_get_current();
+        if (cur)
+            rmap_set(phys, cur->pid, virt);
+    }
 
     return 0;
 }
@@ -219,6 +229,7 @@ void user_vm_destroy_address_space(uint64_t pml4_phys) {
                     if (!(pt[pt_i] & PTE_PRESENT))
                         continue;
                     uint64_t leaf_phys = pt[pt_i] & PTE_ADDR_MASK;
+                    rmap_clear(leaf_phys);
                     pmm_page_unref(leaf_phys);
                 }
 

@@ -44,6 +44,21 @@ int main(void) {
     test_checksum_suite();
     printf("\n");
 
+    test_device_suite();
+    printf("\n");
+
+    test_cred_suite();
+    printf("\n");
+
+    test_bcache_suite();
+    printf("\n");
+
+    test_swap_suite();
+    printf("\n");
+
+    test_journal_suite();
+    printf("\n");
+
     printf("=======================\n");
     printf("Results: %d passed, %d failed, %d total\n",
            tests_passed, tests_failed, tests_passed + tests_failed);

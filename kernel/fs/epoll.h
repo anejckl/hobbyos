@@ -7,6 +7,7 @@
 #define EPOLLOUT  0x004
 #define EPOLLERR  0x008
 #define EPOLLHUP  0x010
+#define EPOLLET   0x80000000
 
 #define EPOLL_CTL_ADD  1
 #define EPOLL_CTL_MOD  2
@@ -24,6 +25,7 @@ struct epoll_watch {
     int fd;
     uint32_t events;
     uint64_t data;
+    bool et_reported;    /* edge-triggered: already reported this ready state */
 };
 
 struct epoll_instance {

@@ -3,8 +3,11 @@
 #include "../memory/pmm.h"
 #include "../memory/vmm.h"
 #include "../memory/user_vm.h"
-#include "../fs/ext2.h"
+#include "../memory/mmap.h"
 #include "../memory/kheap.h"
+#include "../fs/ext2.h"
+#include "../scheduler/scheduler.h"
+#include "../process/process.h"
 #include "../string.h"
 #include "../debug/debug.h"
 
@@ -44,13 +47,19 @@ int elf_validate(const uint8_t *data, uint64_t size) {
     return 0;
 }
 
-/* Load PT_LOAD segments from an ELF into the given address space.
+/* Load PT_LOAD segments from an ELF using demand paging (VMA_ELF entries).
+ * Falls back to eager loading if the current process has no VMA support (kernel context).
  * base_addr is added to all virtual addresses (0 for ET_EXEC, LDSO_BASE for ld.so).
- * Updates result->load_end with the highest loaded page end. */
+ * elf_data_owned indicates whether the elf data buffer should be freed on VMA destroy.
+ * Updates *load_end_out with the highest loaded page end. */
 static int elf_load_segments(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
-                              uint64_t base_addr, uint64_t *load_end_out) {
+                              uint64_t base_addr, uint64_t *load_end_out,
+                              bool demand_paging, bool elf_data_owned,
+                              struct process *target_proc) {
     const Elf64_Ehdr *ehdr = (const Elf64_Ehdr *)data;
     uint64_t load_end = 0;
+
+    struct process *cur = target_proc ? target_proc : scheduler_get_current();
 
     for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
         const Elf64_Phdr *phdr = (const Elf64_Phdr *)
@@ -67,9 +76,14 @@ static int elf_load_segments(uint64_t pml4_phys, const uint8_t *data, uint64_t s
         }
 
         /* Determine page permissions from ELF segment flags */
-        uint64_t flags = PTE_PRESENT | PTE_USER;
-        if (phdr->p_flags & PF_W)   flags |= PTE_WRITABLE;
-        if (!(phdr->p_flags & PF_X)) flags |= PTE_NX;
+        uint64_t pte_flags = PTE_PRESENT | PTE_USER;
+        if (phdr->p_flags & PF_W)   pte_flags |= PTE_WRITABLE;
+        if (!(phdr->p_flags & PF_X)) pte_flags |= PTE_NX;
+
+        uint32_t prot = 0;
+        if (phdr->p_flags & PF_R) prot |= PROT_READ;
+        if (phdr->p_flags & PF_W) prot |= PROT_WRITE;
+        if (phdr->p_flags & PF_X) prot |= PROT_EXEC;
 
         uint64_t vaddr = phdr->p_vaddr + base_addr;
         uint64_t seg_start = vaddr & ~(PAGE_SIZE - 1);
@@ -79,6 +93,31 @@ static int elf_load_segments(uint64_t pml4_phys, const uint8_t *data, uint64_t s
         if (seg_end > load_end)
             load_end = seg_end;
 
+        /* Try demand paging via VMA_ELF */
+        if (demand_paging && cur) {
+            vma_t *vma = vma_alloc(cur);
+            if (vma) {
+                memset(vma, 0, sizeof(*vma));
+                vma->start = seg_start;
+                vma->end = seg_end;
+                vma->prot = prot;
+                vma->flags = MAP_PRIVATE;
+                vma->type = VMA_ELF;
+                vma->in_use = true;
+                vma->elf_data = data + phdr->p_offset;
+                vma->elf_data_filesz = phdr->p_filesz;
+                vma->elf_vaddr = seg_start;
+                /* Only the first segment "owns" the data for freeing purposes */
+                vma->elf_data_owned = false;
+
+                debug_printf("elf_load: demand-page segment %u vaddr=0x%x-0x%x filesz=%u\n",
+                             (uint64_t)i, seg_start, seg_end, phdr->p_filesz);
+                continue;
+            }
+            /* Fall through to eager loading if no VMA slot */
+        }
+
+        /* Eager loading fallback */
         for (uint64_t addr = seg_start; addr < seg_end; addr += PAGE_SIZE) {
             uint64_t phys = pmm_alloc_page();
             if (!phys) {
@@ -98,13 +137,13 @@ static int elf_load_segments(uint64_t pml4_phys, const uint8_t *data, uint64_t s
                 memcpy(kpage + dst_off, data + src_off, copy_end - copy_start);
             }
 
-            if (user_vm_map_page(pml4_phys, addr, phys, flags) < 0) {
+            if (user_vm_map_page(pml4_phys, addr, phys, pte_flags) < 0) {
                 debug_printf("elf_load: failed to map page at 0x%x\n", addr);
                 return -1;
             }
         }
 
-        debug_printf("elf_load: segment %u vaddr=0x%x filesz=%u memsz=%u flags=0x%x\n",
+        debug_printf("elf_load: eager segment %u vaddr=0x%x filesz=%u memsz=%u flags=0x%x\n",
                      (uint64_t)i, vaddr, phdr->p_filesz,
                      phdr->p_memsz, (uint64_t)phdr->p_flags);
     }
@@ -114,7 +153,8 @@ static int elf_load_segments(uint64_t pml4_phys, const uint8_t *data, uint64_t s
 }
 
 int elf_load(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
-             uint64_t base_addr, struct elf_load_result *result) {
+             uint64_t base_addr, struct elf_load_result *result,
+             struct process *target_proc) {
     if (elf_validate(data, size) < 0) {
         debug_printf("elf_load: validation failed\n");
         return -1;
@@ -133,9 +173,9 @@ int elf_load(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
     /* Default entry is main binary entry */
     result->entry_point = ehdr->e_entry + base_addr;
 
-    /* Load PT_LOAD segments */
+    /* Load PT_LOAD segments with demand paging */
     uint64_t load_end = 0;
-    if (elf_load_segments(pml4_phys, data, size, base_addr, &load_end) < 0)
+    if (elf_load_segments(pml4_phys, data, size, base_addr, &load_end, true, false, target_proc) < 0)
         return -1;
     result->load_end = load_end;
 
@@ -177,20 +217,22 @@ int elf_load(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
             /* Validate ld.so ELF */
             if (elf_validate(ldso_buf, (uint64_t)bytes) < 0) {
                 debug_printf("elf_load: ld.so invalid ELF\n");
+                kfree(ldso_buf);
                 break;
             }
 
             const Elf64_Ehdr *ldso_ehdr = (const Elf64_Ehdr *)ldso_buf;
 
-            /* Load ld.so at LDSO_BASE */
+            /* Load ld.so at LDSO_BASE (eager — it's small) */
             uint64_t ldso_load_end = 0;
             if (elf_load_segments(pml4_phys, ldso_buf, (uint64_t)bytes,
-                                  LDSO_BASE, &ldso_load_end) == 0) {
+                                  LDSO_BASE, &ldso_load_end, false, false, target_proc) == 0) {
                 result->at_base     = LDSO_BASE;
                 result->entry_point = ldso_ehdr->e_entry + LDSO_BASE;
                 debug_printf("elf_load: ld.so loaded at 0x%x entry=0x%x\n",
                              (uint64_t)LDSO_BASE, result->entry_point);
             }
+            kfree(ldso_buf);
             break;
         }
     }

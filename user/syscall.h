@@ -54,6 +54,24 @@ typedef uint64_t           size_t;
 #define SYS_SEND        38
 #define SYS_RECV        39
 
+/* Credential syscalls (Phase 17) */
+#define SYS_GETUID      40
+#define SYS_GETGID      41
+#define SYS_SETUID      42
+#define SYS_SETGID      43
+#define SYS_CHOWN       44
+#define SYS_CHMOD       45
+#define SYS_SETEUID     46
+
+/* Networking syscalls (Phase 20) */
+#define SYS_FCNTL       47
+#define SYS_SENDFILE    48
+
+/* fcntl commands */
+#define F_GETFL  3
+#define F_SETFL  4
+#define O_NONBLOCK  0x800
+
 /* Open flags */
 #define O_CREAT         0x40
 
@@ -380,6 +398,37 @@ static inline int64_t sys_send(int fd, const void *buf, uint64_t len, int flags)
 }
 static inline int64_t sys_recv(int fd, void *buf, uint64_t len, int flags) {
     return (int64_t)syscall4(SYS_RECV, (uint64_t)fd, (uint64_t)buf, len, (uint64_t)flags);
+}
+
+static inline uint64_t sys_getuid(void) {
+    return syscall0(SYS_GETUID);
+}
+static inline uint64_t sys_getgid(void) {
+    return syscall0(SYS_GETGID);
+}
+static inline int64_t sys_setuid(uint16_t uid) {
+    return (int64_t)syscall1(SYS_SETUID, (uint64_t)uid);
+}
+static inline int64_t sys_setgid(uint16_t gid) {
+    return (int64_t)syscall1(SYS_SETGID, (uint64_t)gid);
+}
+static inline int64_t sys_chown(const char *path, uint16_t uid, uint16_t gid) {
+    return (int64_t)syscall3(SYS_CHOWN, (uint64_t)path, (uint64_t)uid, (uint64_t)gid);
+}
+static inline int64_t sys_chmod(const char *path, uint16_t mode) {
+    return (int64_t)syscall2(SYS_CHMOD, (uint64_t)path, (uint64_t)mode);
+}
+static inline int64_t sys_seteuid(uint16_t euid) {
+    return (int64_t)syscall1(SYS_SETEUID, (uint64_t)euid);
+}
+
+/* Phase 20: fcntl and sendfile */
+static inline int64_t sys_fcntl(int fd, int cmd, uint64_t arg) {
+    return (int64_t)syscall3(SYS_FCNTL, (uint64_t)fd, (uint64_t)cmd, arg);
+}
+static inline int64_t sys_sendfile(int out_fd, int in_fd, uint64_t *offset, uint64_t count) {
+    return (int64_t)syscall4(SYS_SENDFILE, (uint64_t)out_fd, (uint64_t)in_fd,
+                              (uint64_t)offset, count);
 }
 
 #endif /* USER_SYSCALL_H */

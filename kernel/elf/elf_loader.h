@@ -30,8 +30,13 @@ int elf_validate(const uint8_t *data, uint64_t size);
  * base_addr  - load base address (0 for ET_EXEC, LDSO_BASE for ld.so)
  * result     - output: entry point and load info
  * Returns 0 on success, -1 on failure. */
+struct process;  /* forward declaration */
+
+/* target_proc: the process whose vmas[] will receive demand-paging entries.
+ * Pass NULL to use the current process (for exec-style reloading). */
 int elf_load(uint64_t pml4_phys, const uint8_t *data, uint64_t size,
-             uint64_t base_addr, struct elf_load_result *result);
+             uint64_t base_addr, struct elf_load_result *result,
+             struct process *target_proc);
 
 /* Set up SysV AMD64 ABI argc/argv stack layout in a physical stack page.
  * stack_phys      - physical address of the 4 KB stack page

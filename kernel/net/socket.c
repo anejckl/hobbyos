@@ -62,6 +62,10 @@ int socket_accept(int sock_idx) {
     if (!s || !s->listening)
         return -1;
 
+    /* Non-blocking: return EAGAIN if no connection ready */
+    if (s->nonblocking && !tcp_conn_acceptable(s->tcp_conn_idx))
+        return -(int)EAGAIN;
+
     /* Block until a connection is in accept queue */
     int new_tcp_idx = tcp_accept(s->tcp_conn_idx);
     if (new_tcp_idx < 0)
@@ -128,6 +132,8 @@ int socket_send(int sock_idx, const uint8_t *data, uint32_t len) {
 
     if (s->type == SOCK_STREAM) {
         if (s->tcp_conn_idx < 0) return -1;
+        if (s->nonblocking && !tcp_conn_writable(s->tcp_conn_idx))
+            return -(int)EAGAIN;
         return tcp_send(s->tcp_conn_idx, data, len);
     } else if (s->type == SOCK_DGRAM) {
         if (!s->connected) return -1;
@@ -142,8 +148,13 @@ int socket_recv(int sock_idx, uint8_t *buf, uint32_t len) {
 
     if (s->type == SOCK_STREAM) {
         if (s->tcp_conn_idx < 0) return -1;
+        if (s->nonblocking && !tcp_conn_readable(s->tcp_conn_idx))
+            return -(int)EAGAIN;
         return tcp_recv(s->tcp_conn_idx, buf, len);
     } else if (s->type == SOCK_DGRAM) {
+        /* Non-blocking check */
+        if (s->nonblocking && s->udp_count == 0)
+            return -(int)EAGAIN;
         /* Block until packet available */
         while (s->udp_count == 0) {
             struct process *cur = scheduler_get_current();

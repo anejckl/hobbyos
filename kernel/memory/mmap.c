@@ -2,6 +2,7 @@
 #include "pmm.h"
 #include "vmm.h"
 #include "user_vm.h"
+#include "kheap.h"
 #include "../process/process.h"
 #include "../fs/ext2.h"
 #include "../string.h"
@@ -102,6 +103,18 @@ int vma_handle_fault(struct process *proc, uint64_t fault_addr, bool is_write) {
         }
     }
 
+    /* ELF demand paging: copy file data from in-memory ELF */
+    if (vma->type == VMA_ELF && vma->elf_data) {
+        uint64_t page_offset = page - vma->elf_vaddr;
+        uint8_t *kpage = (uint8_t *)PHYS_TO_VIRT(phys);
+        if (page_offset < vma->elf_data_filesz) {
+            uint64_t copy_len = vma->elf_data_filesz - page_offset;
+            if (copy_len > PAGE_SIZE)
+                copy_len = PAGE_SIZE;
+            memcpy(kpage, vma->elf_data + page_offset, copy_len);
+        }
+    }
+
     uint64_t flags = PTE_PRESENT | PTE_USER;
     if (vma->prot & PROT_WRITE) flags |= PTE_WRITABLE;
 
@@ -164,7 +177,12 @@ void vma_fork_copy(struct process *parent, struct process *child) {
 }
 
 void vma_destroy_all(struct process *proc) {
-    for (int i = 0; i < VMA_MAX; i++)
+    for (int i = 0; i < VMA_MAX; i++) {
+        if (proc->vmas[i].in_use && proc->vmas[i].type == VMA_ELF &&
+            proc->vmas[i].elf_data_owned && proc->vmas[i].elf_data) {
+            kfree((void *)proc->vmas[i].elf_data);
+        }
         proc->vmas[i].in_use = false;
+    }
     proc->mmap_next = MMAP_BASE;
 }

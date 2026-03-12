@@ -90,6 +90,10 @@ struct process {
     uint64_t brk_start;     /* first addr after ELF load */
     uint64_t brk_current;   /* current brk */
 
+    /* Process credentials (Phase 17) */
+    uint16_t uid, gid;      /* real user/group ID */
+    uint16_t euid, egid;    /* effective (for setuid binaries) */
+
     /* epoll blocking (Phase 13) */
     int      epoll_fd_idx;          /* epoll instance index, -1 = not blocked */
     uint64_t epoll_timeout_ticks;   /* (uint64_t)-1 = infinite */

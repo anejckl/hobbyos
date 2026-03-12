@@ -29,14 +29,22 @@
 #include "autotest.h"
 #include "drivers/pci.h"
 #include "drivers/e1000.h"
+#include "drivers/driver_model.h"
+#include "drivers/blockcache.h"
 #include "net/netbuf.h"
 #include "net/net.h"
 #include "net/tcp.h"
+#include "memory/rmap.h"
+#include "memory/swap.h"
+#include "memory/pagecache.h"
+#include "fs/journal.h"
 
 /* Device init forward declarations */
 extern void dev_null_init(void);
 extern void dev_zero_init(void);
 extern void dev_tty_init(void);
+extern void dev_random_init(void);
+extern void dev_input_init(void);
 
 /* Multiboot2 constants */
 #define MULTIBOOT2_MAGIC 0x36D76289
@@ -117,6 +125,12 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
     vga_printf("[OK] Kernel heap initialized\n");
     debug_printf("Kernel heap initialized\n");
 
+    /* Reverse map + swap + page cache */
+    rmap_init();
+    swap_init();
+    pagecache_init();
+    vga_printf("[OK] VM subsystems (rmap, swap, pagecache) initialized\n");
+
     /* Phase 7: Process + Scheduler */
     process_init();
     vga_printf("[OK] Process subsystem initialized\n");
@@ -146,9 +160,11 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
 
     /* Device framework */
     device_init();
+    driver_subsys_init();
     dev_null_init();
     dev_zero_init();
     dev_tty_init();
+    dev_random_init();
     devfs_init();
     vga_printf("[OK] Device framework initialized (/dev)\n");
 
@@ -189,10 +205,23 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
     mouse_init();
     vga_printf("[OK] PS/2 mouse initialized\n");
 
+    /* Input device nodes (/dev/input/keyboard, /dev/input/mouse0) */
+    dev_input_init();
+    vga_printf("[OK] Input device nodes registered\n");
+
+    /* Block cache */
+    bcache_init();
+    vga_printf("[OK] Block cache initialized\n");
+
     /* ATA disk driver */
     ata_init();
     if (ata_disk_present()) {
         vga_printf("[OK] ATA disk detected\n");
+
+        /* Journal recovery before ext2 init */
+        journal_init();
+        journal_recover();
+
         if (ext2_init() == 0)
             vga_printf("[OK] ext2 filesystem mounted\n");
         else

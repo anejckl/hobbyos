@@ -1,7 +1,10 @@
 #include "pmm.h"
+#include "swap.h"
 #include "../string.h"
 #include "../drivers/vga.h"
 #include "../debug/debug.h"
+
+#define SWAP_LOW_WATERMARK 32  /* Trigger swap eviction below this many free pages */
 
 /* Multiboot2 structures */
 struct mb2_tag {
@@ -172,6 +175,12 @@ void pmm_init(uint32_t multiboot_info_phys) {
 }
 
 uint64_t pmm_alloc_page(void) {
+    /* If free pages are low, try to evict pages to swap */
+    if (free_pages < SWAP_LOW_WATERMARK) {
+        for (int i = 0; i < 8 && free_pages < SWAP_LOW_WATERMARK; i++)
+            swap_evict_one();
+    }
+
     /* Next-fit: scan from hint, wrap around if needed */
     for (uint64_t j = 0; j < total_pages; j++) {
         uint64_t i = (alloc_hint + j) % total_pages;

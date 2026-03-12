@@ -45,6 +45,19 @@
 #define SYS_SEND        38
 #define SYS_RECV        39
 
+/* Credential syscalls (Phase 17) */
+#define SYS_GETUID      40
+#define SYS_GETGID      41
+#define SYS_SETUID      42
+#define SYS_SETGID      43
+#define SYS_CHOWN       44
+#define SYS_CHMOD       45
+#define SYS_SETEUID     46
+
+/* Networking syscalls (Phase 20) */
+#define SYS_FCNTL       47
+#define SYS_SENDFILE    48
+
 void syscall_init(void);
 
 #endif /* SYSCALL_H */

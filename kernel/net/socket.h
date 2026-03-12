@@ -21,6 +21,15 @@ struct socket_udp_pkt {
     bool valid;
 };
 
+/* fcntl commands */
+#define F_GETFL  3
+#define F_SETFL  4
+#define O_NONBLOCK  0x800
+
+/* Error codes */
+#define EAGAIN      11
+#define EINPROGRESS 115
+
 struct socket {
     int type;           /* SOCK_DGRAM or SOCK_STREAM */
     uint32_t local_ip;
@@ -31,6 +40,7 @@ struct socket {
     bool listening;
     bool connected;
     bool in_use;
+    bool nonblocking;   /* O_NONBLOCK set via fcntl */
     int refcount;
 
     /* UDP rx queue */

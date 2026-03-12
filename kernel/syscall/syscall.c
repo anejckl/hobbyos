@@ -28,6 +28,7 @@
 #include "../elf/elf.h"
 #include "../elf/elf_loader.h"
 #include "../memory/pmm.h"
+#include "../security/cred.h"
 
 /* Initialize FD table for a process with console on 0/1/2 */
 void process_fd_init(struct process *proc) {
@@ -131,6 +132,10 @@ static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
     const uint8_t *prog_data = NULL;
     uint8_t *ext2_buf = NULL;
 
+    /* Track ext2 inode for setuid/setgid + permission check */
+    struct ext2_inode exec_inode;
+    bool have_ext2_inode = false;
+
     if (ext2_is_mounted()) {
         char ext2_path[64];
         ext2_path[0] = '/';
@@ -145,6 +150,15 @@ static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
         if (ino) {
             struct ext2_inode inode;
             if (ext2_read_inode(ino, &inode) == 0 && inode.i_size > 0) {
+                /* Check exec permission */
+                if (!cred_check_exec(cur, inode.i_mode,
+                                     inode.i_uid, inode.i_gid)) {
+                    debug_printf("syscall: exec '%s' permission denied\n", name_buf);
+                    frame->rax = (uint64_t)-1;
+                    return;
+                }
+                exec_inode = inode;
+                have_ext2_inode = true;
                 ext2_buf = (uint8_t *)kmalloc(inode.i_size);
                 if (ext2_buf) {
                     int bytes = ext2_read_file(&inode, 0,
@@ -183,9 +197,12 @@ static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
         return;
     }
 
+    /* Clear old VMAs before loading new ELF (demand paging stores VMAs on cur) */
+    vma_destroy_all(cur);
+
     /* Load ELF segments into new address space */
     struct elf_load_result elf_result;
-    if (elf_load(new_cr3, prog_data, prog_size, 0, &elf_result) < 0) {
+    if (elf_load(new_cr3, prog_data, prog_size, 0, &elf_result, NULL) < 0) {
         debug_printf("syscall: exec '%s' ELF load failed\n", name_buf);
         user_vm_destroy_address_space(new_cr3);
         frame->rax = (uint64_t)-1;
@@ -222,7 +239,6 @@ static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
     /* === Point of no return === */
 
     /* Destroy old address space and switch to new one */
-    vma_destroy_all(cur);
     uint64_t old_cr3 = cur->cr3;
     cur->cr3 = new_cr3;
     write_cr3(scheduler_get_kernel_cr3());
@@ -244,6 +260,14 @@ static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
     cur->name[sizeof(cur->name) - 1] = '\0';
     cur->user_program_data = prog_data;
     cur->user_program_size = prog_size;
+
+    /* Handle setuid/setgid from ext2 inode */
+    if (have_ext2_inode) {
+        if (exec_inode.i_mode & 0x0800)  /* S_ISUID */
+            cur->euid = exec_inode.i_uid;
+        if (exec_inode.i_mode & 0x0400)  /* S_ISGID */
+            cur->egid = exec_inode.i_gid;
+    }
 
     /* Initialize brk for new image */
     cur->mmap_next   = MMAP_BASE;
@@ -324,6 +348,8 @@ static void syscall_execv(struct interrupt_frame *frame,
     uint64_t prog_size = 0;
     const uint8_t *prog_data = NULL;
     uint8_t *ext2_buf = NULL;
+    struct ext2_inode execv_inode;
+    bool have_execv_ext2_inode = false;
 
     if (ext2_is_mounted()) {
         char ext2_path[72];
@@ -336,6 +362,15 @@ static void syscall_execv(struct interrupt_frame *frame,
         if (ino) {
             struct ext2_inode inode;
             if (ext2_read_inode(ino, &inode) == 0 && inode.i_size > 0) {
+                /* Check exec permission */
+                if (!cred_check_exec(cur, inode.i_mode,
+                                     inode.i_uid, inode.i_gid)) {
+                    debug_printf("syscall: execv '%s' permission denied\n", name_buf);
+                    frame->rax = (uint64_t)-1;
+                    return;
+                }
+                execv_inode = inode;
+                have_execv_ext2_inode = true;
                 ext2_buf = (uint8_t *)kmalloc(inode.i_size);
                 if (ext2_buf) {
                     int bytes = ext2_read_file(&inode, 0, inode.i_size, ext2_buf);
@@ -367,8 +402,11 @@ static void syscall_execv(struct interrupt_frame *frame,
         return;
     }
 
+    /* Clear old VMAs before loading new ELF (demand paging stores VMAs on cur) */
+    vma_destroy_all(cur);
+
     struct elf_load_result elf_result;
-    if (elf_load(new_cr3, prog_data, prog_size, 0, &elf_result) < 0) {
+    if (elf_load(new_cr3, prog_data, prog_size, 0, &elf_result, NULL) < 0) {
         user_vm_destroy_address_space(new_cr3);
         frame->rax = (uint64_t)-1;
         return;
@@ -398,7 +436,6 @@ static void syscall_execv(struct interrupt_frame *frame,
     }
 
     /* === Point of no return === */
-    vma_destroy_all(cur);
     uint64_t old_cr3 = cur->cr3;
     cur->cr3 = new_cr3;
     write_cr3(scheduler_get_kernel_cr3());
@@ -417,6 +454,14 @@ static void syscall_execv(struct interrupt_frame *frame,
     cur->name[sizeof(cur->name) - 1] = '\0';
     cur->user_program_data = prog_data;
     cur->user_program_size = prog_size;
+
+    /* Handle setuid/setgid from ext2 inode */
+    if (have_execv_ext2_inode) {
+        if (execv_inode.i_mode & 0x0800)  /* S_ISUID */
+            cur->euid = execv_inode.i_uid;
+        if (execv_inode.i_mode & 0x0400)  /* S_ISGID */
+            cur->egid = execv_inode.i_gid;
+    }
 
     /* Initialize brk for new image */
     cur->mmap_next   = MMAP_BASE;
@@ -501,7 +546,13 @@ static void syscall_fork(struct interrupt_frame *frame) {
         }
     }
 
-    /* 8. Copy signal handlers */
+    /* 8. Copy credentials from parent */
+    child->uid = parent->uid;
+    child->gid = parent->gid;
+    child->euid = parent->euid;
+    child->egid = parent->egid;
+
+    /* 9. Copy signal handlers */
     memcpy(child->sig_handlers, parent->sig_handlers,
            sizeof(parent->sig_handlers));
     child->sig_pending = 0;
@@ -732,14 +783,24 @@ static uint64_t syscall_epoll_wait(uint64_t epfd, uint64_t args_ptr) {
     int found = 0;
     for (int j = 0; j < ep->watch_count && found < args.maxevents; j++) {
         int wfd = ep->watches[j].fd;
-        uint32_t wev = ep->watches[j].events;
+        uint32_t wev = ep->watches[j].events & ~EPOLLET;  /* mask out ET flag for check */
+        bool is_et = (ep->watches[j].events & EPOLLET) != 0;
         uint32_t ready = 0;
         if ((wev & EPOLLIN) && fd_is_readable(proc, wfd))   ready |= EPOLLIN;
         if ((wev & EPOLLOUT) && fd_is_writable(proc, wfd))  ready |= EPOLLOUT;
         if (ready) {
+            /* Edge-triggered: only report if not already reported */
+            if (is_et && ep->watches[j].et_reported)
+                continue;
             user_events[found].events = ready;
             user_events[found].data   = ep->watches[j].data;
             found++;
+            if (is_et)
+                ep->watches[j].et_reported = true;
+        } else {
+            /* FD not ready: reset ET flag so next ready state triggers */
+            if (is_et)
+                ep->watches[j].et_reported = false;
         }
     }
     if (found > 0 || args.timeout_ms == 0)
@@ -762,14 +823,22 @@ static uint64_t syscall_epoll_wait(uint64_t epfd, uint64_t args_ptr) {
     found = 0;
     for (int j = 0; j < ep->watch_count && found < args.maxevents; j++) {
         int wfd = ep->watches[j].fd;
-        uint32_t wev = ep->watches[j].events;
+        uint32_t wev = ep->watches[j].events & ~EPOLLET;
+        bool is_et = (ep->watches[j].events & EPOLLET) != 0;
         uint32_t ready = 0;
         if ((wev & EPOLLIN) && fd_is_readable(proc, wfd))   ready |= EPOLLIN;
         if ((wev & EPOLLOUT) && fd_is_writable(proc, wfd))  ready |= EPOLLOUT;
         if (ready) {
+            if (is_et && ep->watches[j].et_reported)
+                continue;
             user_events[found].events = ready;
             user_events[found].data   = ep->watches[j].data;
             found++;
+            if (is_et)
+                ep->watches[j].et_reported = true;
+        } else {
+            if (is_et)
+                ep->watches[j].et_reported = false;
         }
     }
     return (uint64_t)found;
@@ -1148,6 +1217,15 @@ static void syscall_handler(struct interrupt_frame *frame) {
                 if (ext2_is_mounted()) {
                     uint32_t ino = ext2_path_lookup(path);
                     if (ino) {
+                        /* Check read permission */
+                        struct ext2_inode chk_inode;
+                        if (ext2_read_inode(ino, &chk_inode) == 0) {
+                            if (!cred_check_read(cur, chk_inode.i_mode,
+                                                 chk_inode.i_uid, chk_inode.i_gid)) {
+                                frame->rax = (uint64_t)-1;
+                                return;
+                            }
+                        }
                         /* Found on ext2 — create FD_EXT2 */
                         int fd = process_fd_alloc(cur, 3);
                         if (fd < 0) {
@@ -1617,6 +1695,19 @@ static void syscall_handler(struct interrupt_frame *frame) {
             return;
         }
 
+        /* Check write permission on parent directory */
+        {
+            struct process *cur = scheduler_get_current();
+            struct ext2_inode parent_inode;
+            if (ext2_read_inode(parent_ino, &parent_inode) == 0) {
+                if (!cred_check_write(cur, parent_inode.i_mode,
+                                      parent_inode.i_uid, parent_inode.i_gid)) {
+                    frame->rax = (uint64_t)-1;
+                    return;
+                }
+            }
+        }
+
         uint32_t ino = ext2_mkdir(parent_ino, dirname);
         frame->rax = ino ? 0 : (uint64_t)-1;
         return;
@@ -1658,6 +1749,19 @@ static void syscall_handler(struct interrupt_frame *frame) {
         if (!parent_ino || !*fname) {
             frame->rax = (uint64_t)-1;
             return;
+        }
+
+        /* Check write permission on parent directory */
+        {
+            struct process *cur = scheduler_get_current();
+            struct ext2_inode parent_inode;
+            if (ext2_read_inode(parent_ino, &parent_inode) == 0) {
+                if (!cred_check_write(cur, parent_inode.i_mode,
+                                      parent_inode.i_uid, parent_inode.i_gid)) {
+                    frame->rax = (uint64_t)-1;
+                    return;
+                }
+            }
         }
 
         frame->rax = (uint64_t)ext2_unlink(parent_ino, fname);
@@ -1992,6 +2096,252 @@ static void syscall_handler(struct interrupt_frame *frame) {
     case SYS_RECV:
         frame->rax = (uint64_t)syscall_recv(arg1, arg2, arg3, frame->r10);
         return;
+
+    case SYS_GETUID: {
+        struct process *cur = scheduler_get_current();
+        frame->rax = (uint64_t)cur->uid;
+        return;
+    }
+
+    case SYS_GETGID: {
+        struct process *cur = scheduler_get_current();
+        frame->rax = (uint64_t)cur->gid;
+        return;
+    }
+
+    case SYS_SETUID: {
+        /* setuid: root can set to anything, non-root can only set to current uid or euid */
+        struct process *cur = scheduler_get_current();
+        uint16_t new_uid = (uint16_t)arg1;
+        if (cur->euid == 0) {
+            cur->uid = new_uid;
+            cur->euid = new_uid;
+            frame->rax = 0;
+        } else if (new_uid == cur->uid || new_uid == cur->euid) {
+            cur->uid = new_uid;
+            frame->rax = 0;
+        } else {
+            frame->rax = (uint64_t)-1;  /* -EPERM */
+        }
+        return;
+    }
+
+    case SYS_SETGID: {
+        struct process *cur = scheduler_get_current();
+        uint16_t new_gid = (uint16_t)arg1;
+        if (cur->euid == 0) {
+            cur->gid = new_gid;
+            cur->egid = new_gid;
+            frame->rax = 0;
+        } else if (new_gid == cur->gid || new_gid == cur->egid) {
+            cur->gid = new_gid;
+            frame->rax = 0;
+        } else {
+            frame->rax = (uint64_t)-1;  /* -EPERM */
+        }
+        return;
+    }
+
+    case SYS_CHOWN: {
+        /* chown(path, uid, gid) — only root or file owner can chown */
+        const char *path = (const char *)arg1;
+        uint16_t new_uid = (uint16_t)arg2;
+        uint16_t new_gid = (uint16_t)arg3;
+
+        if ((uint64_t)path >= KERNEL_VMA) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        if (!ext2_is_mounted()) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        uint32_t ino = ext2_path_lookup(path);
+        if (!ino) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        struct ext2_inode inode;
+        if (ext2_read_inode(ino, &inode) < 0) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        struct process *cur = scheduler_get_current();
+        /* Only root or file owner can chown */
+        if (cur->euid != 0 && cur->euid != inode.i_uid) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        inode.i_uid = new_uid;
+        inode.i_gid = new_gid;
+        if (ext2_write_inode(ino, &inode) < 0) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        frame->rax = 0;
+        return;
+    }
+
+    case SYS_CHMOD: {
+        /* chmod(path, mode) — only root or file owner can chmod */
+        const char *path = (const char *)arg1;
+        uint16_t new_mode = (uint16_t)arg2;
+
+        if ((uint64_t)path >= KERNEL_VMA) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        if (!ext2_is_mounted()) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        uint32_t ino = ext2_path_lookup(path);
+        if (!ino) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        struct ext2_inode inode;
+        if (ext2_read_inode(ino, &inode) < 0) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        struct process *cur = scheduler_get_current();
+        if (cur->euid != 0 && cur->euid != inode.i_uid) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        /* Preserve file type bits, update permission bits */
+        inode.i_mode = (inode.i_mode & 0xF000) | (new_mode & 0x0FFF);
+        if (ext2_write_inode(ino, &inode) < 0) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        frame->rax = 0;
+        return;
+    }
+
+    case SYS_SETEUID: {
+        /* seteuid: root can set to anything, non-root can set to uid or current euid */
+        struct process *cur = scheduler_get_current();
+        uint16_t new_euid = (uint16_t)arg1;
+        if (cur->euid == 0) {
+            cur->euid = new_euid;
+            frame->rax = 0;
+        } else if (new_euid == cur->uid || new_euid == cur->euid) {
+            cur->euid = new_euid;
+            frame->rax = 0;
+        } else {
+            frame->rax = (uint64_t)-1;  /* -EPERM */
+        }
+        return;
+    }
+
+    case SYS_FCNTL: {
+        /* fcntl(fd, cmd, arg) */
+        struct process *cur = scheduler_get_current();
+        int fd = (int)arg1;
+        int cmd = (int)arg2;
+        uint64_t arg = arg3;
+
+        if (fd < 0 || fd >= PROCESS_MAX_FDS || cur->fd_table[fd].type == FD_NONE) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        if (cmd == 3) {  /* F_GETFL */
+            /* Return flags — check if socket is nonblocking */
+            if (cur->fd_table[fd].type == FD_SOCKET) {
+                struct socket *s = socket_get((int)(uint64_t)cur->fd_table[fd].data);
+                frame->rax = s && s->nonblocking ? 0x800 : 0;
+            } else {
+                frame->rax = 0;
+            }
+        } else if (cmd == 4) {  /* F_SETFL */
+            if (cur->fd_table[fd].type == FD_SOCKET) {
+                struct socket *s = socket_get((int)(uint64_t)cur->fd_table[fd].data);
+                if (s) {
+                    s->nonblocking = (arg & 0x800) != 0;
+                    frame->rax = 0;
+                } else {
+                    frame->rax = (uint64_t)-1;
+                }
+            } else {
+                frame->rax = 0;  /* silently accept for non-sockets */
+            }
+        } else {
+            frame->rax = (uint64_t)-1;
+        }
+        return;
+    }
+
+    case SYS_SENDFILE: {
+        /* sendfile(out_fd, in_fd, offset_ptr, count) */
+        struct process *cur = scheduler_get_current();
+        int out_fd = (int)arg1;
+        int in_fd = (int)arg2;
+        uint64_t *offset_ptr = (uint64_t *)arg3;
+        uint64_t count = frame->r10;
+
+        if (out_fd < 0 || out_fd >= PROCESS_MAX_FDS ||
+            in_fd < 0 || in_fd >= PROCESS_MAX_FDS) {
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+
+        /* Determine source offset */
+        uint64_t offset = 0;
+        if (offset_ptr && (uint64_t)offset_ptr < KERNEL_VMA)
+            offset = *offset_ptr;
+        else if (cur->fd_table[in_fd].type != FD_NONE)
+            offset = cur->fd_table[in_fd].offset;
+
+        /* Read from input and write to output in 4KB chunks */
+        static uint8_t sendfile_buf[4096];
+        uint64_t total = 0;
+
+        while (total < count) {
+            uint64_t chunk = count - total;
+            if (chunk > 4096) chunk = 4096;
+
+            /* Read from input fd */
+            int bytes_read = 0;
+            if (cur->fd_table[in_fd].type == FD_EXT2) {
+                uint32_t ino = (uint32_t)(uint64_t)cur->fd_table[in_fd].data;
+                struct ext2_inode inode;
+                if (ext2_read_inode(ino, &inode) < 0) break;
+                bytes_read = ext2_read_file(&inode, offset + total, chunk, sendfile_buf);
+                if (bytes_read <= 0) break;
+            } else {
+                break;  /* Only support ext2 input for now */
+            }
+
+            /* Write to output fd */
+            if (cur->fd_table[out_fd].type == FD_SOCKET) {
+                int sock_idx = (int)(uint64_t)cur->fd_table[out_fd].data;
+                int sent = socket_send(sock_idx, sendfile_buf, (uint32_t)bytes_read);
+                if (sent <= 0) break;
+                total += (uint64_t)sent;
+            } else {
+                break;  /* Only support socket output for now */
+            }
+        }
+
+        if (offset_ptr && (uint64_t)offset_ptr < KERNEL_VMA)
+            *offset_ptr = offset + total;
+
+        frame->rax = total;
+        return;
+    }
 
     default:
         debug_printf("syscall: unknown syscall %u\n", num);

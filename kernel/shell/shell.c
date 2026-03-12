@@ -21,6 +21,10 @@
 #include "../net/arp.h"
 #include "../drivers/e1000.h"
 #include "../drivers/pit.h"
+#include "../drivers/blockcache.h"
+#include "../fs/journal.h"
+#include "../memory/pagecache.h"
+#include "../memory/swap.h"
 
 #define CMD_BUFFER_SIZE 256
 #define MAX_ARGS 16
@@ -61,6 +65,7 @@ static void cmd_cat(int argc, char **argv);
 static void cmd_ping(int argc, char **argv);
 static void cmd_ifconfig(int argc, char **argv);
 static void cmd_arp(int argc, char **argv);
+static void cmd_sync(int argc, char **argv);
 
 static struct command commands[] = {
     {"help",   "Show available commands",     cmd_help},
@@ -80,6 +85,7 @@ static struct command commands[] = {
     {"ping",   "Ping an IP address",          cmd_ping},
     {"ifconfig","Show network config",        cmd_ifconfig},
     {"arp",    "Show ARP table",              cmd_arp},
+    {"sync",   "Flush caches to disk",       cmd_sync},
     {NULL, NULL, NULL}
 };
 
@@ -674,6 +680,14 @@ static void cmd_ifconfig(int argc, char **argv) {
 static void cmd_arp(int argc, char **argv) {
     (void)argc; (void)argv;
     arp_display_table();
+}
+
+static void cmd_sync(int argc, char **argv) {
+    (void)argc; (void)argv;
+    vga_printf("Syncing...\n");
+    bcache_sync();
+    pagecache_sync();
+    vga_printf("Done.\n");
 }
 
 static void shell_readline(char *buf, size_t size) {

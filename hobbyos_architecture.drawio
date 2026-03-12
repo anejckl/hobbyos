@@ -1,0 +1,472 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36" version="29.6.1" pages="2">
+  <diagram id="arch" name="Current Architecture">
+    <mxGraphModel dx="1901" dy="1151" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;fontSize=24;fontStyle=1;align=center;verticalAlign=middle;" value="HobbyOS — Current Architecture" vertex="1">
+          <mxGeometry height="40" width="800" x="400" y="10" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" parent="1" style="text;html=1;fontSize=13;fontStyle=2;align=center;fontColor=#666666;" value="x86_64 Higher-Half Kernel • Multiboot2 • 64-bit Long Mode • 48 Syscalls" vertex="1">
+          <mxGeometry height="25" width="800" x="400" y="45" as="geometry" />
+        </mxCell>
+        <mxCell id="user_group" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E8F5E9;strokeColor=#43A047;strokeWidth=2;arcSize=8;" value="" vertex="1">
+          <mxGeometry height="180" width="1520" x="40" y="80" as="geometry" />
+        </mxCell>
+        <mxCell id="user_label" parent="1" style="text;html=1;fontSize=14;fontStyle=1;align=left;fontColor=#2E7D32;" value="USERLAND (Ring 3)" vertex="1">
+          <mxGeometry height="25" width="200" x="55" y="85" as="geometry" />
+        </mxCell>
+        <mxCell id="user_progs" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#C8E6C9;strokeColor=#43A047;" value="&lt;b&gt;User Programs (45+)&lt;/b&gt;&lt;br&gt;hello, counter, fork_test&lt;br&gt;cow_test, pipe_test, signal_test&lt;br&gt;id, whoami, demand_test&lt;br&gt;perm_test, nonblock_test..." vertex="1">
+          <mxGeometry height="100" width="220" x="60" y="115" as="geometry" />
+        </mxCell>
+        <mxCell id="shared_libs" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#C8E6C9;strokeColor=#43A047;" value="&lt;b&gt;Shared Libraries&lt;/b&gt;&lt;br&gt;libc.so (printf, malloc, string)&lt;br&gt;libgfx.so (graphics primitives)&lt;br&gt;ld.so (dynamic linker)" vertex="1">
+          <mxGeometry height="100" width="220" x="300" y="115" as="geometry" />
+        </mxCell>
+        <mxCell id="user_syscall" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#C8E6C9;strokeColor=#43A047;" value="&lt;b&gt;Syscall Interface&lt;/b&gt;&lt;br&gt;INT 0x80 wrappers&lt;br&gt;user/syscall.h" vertex="1">
+          <mxGeometry height="100" width="180" x="540" y="115" as="geometry" />
+        </mxCell>
+        <mxCell id="shell" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#A5D6A7;strokeColor=#2E7D32;strokeWidth=2;" value="&lt;b&gt;Shell&lt;/b&gt;&lt;br&gt;18 commands (+sync)&lt;br&gt;pipe operator (|)&lt;br&gt;background jobs (&amp;amp;)&lt;br&gt;Ctrl+C (SIGINT)&lt;br&gt;Tab completion" vertex="1">
+          <mxGeometry height="100" width="170" x="740" y="115" as="geometry" />
+        </mxCell>
+        <mxCell id="elf_loader" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#C8E6C9;strokeColor=#43A047;" value="&lt;b&gt;ELF64 Loader&lt;/b&gt;&lt;br&gt;Demand paging&lt;br&gt;Dynamic linking&lt;br&gt;.interp → ld.so" vertex="1">
+          <mxGeometry height="100" width="170" x="930" y="115" as="geometry" />
+        </mxCell>
+        <mxCell id="wm" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#C8E6C9;strokeColor=#43A047;" value="&lt;b&gt;Window Manager&lt;/b&gt;&lt;br&gt;wm.c (framebuffer)&lt;br&gt;Mouse cursor&lt;br&gt;32bpp graphics" vertex="1">
+          <mxGeometry height="100" width="170" x="1120" y="115" as="geometry" />
+        </mxCell>
+        <mxCell id="tty" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#C8E6C9;strokeColor=#43A047;" value="&lt;b&gt;TTY Subsystem&lt;/b&gt;&lt;br&gt;Per-process TTY&lt;br&gt;Line buffering&lt;br&gt;Echo, backspace" vertex="1">
+          <mxGeometry height="100" width="170" x="1310" y="115" as="geometry" />
+        </mxCell>
+        <mxCell id="syscall_boundary" parent="1" style="shape=line;strokeColor=#D32F2F;strokeWidth=3;strokeDashArray=8 4;" value="" vertex="1">
+          <mxGeometry height="10" width="1520" x="40" y="270" as="geometry" />
+        </mxCell>
+        <mxCell id="syscall_label" parent="1" style="text;html=1;fontSize=12;fontStyle=5;align=center;fontColor=#D32F2F;" value="INT 0x80 — Syscall Boundary (48 syscalls: I/O, process, memory, network, security)" vertex="1">
+          <mxGeometry height="20" width="700" x="450" y="272" as="geometry" />
+        </mxCell>
+        <mxCell id="kernel_group" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E3F2FD;strokeColor=#1565C0;strokeWidth=2;arcSize=6;" value="" vertex="1">
+          <mxGeometry height="200" width="1520" x="40" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="kernel_label" parent="1" style="text;html=1;fontSize=14;fontStyle=1;align=left;fontColor=#0D47A1;" value="KERNEL CORE (Ring 0)" vertex="1">
+          <mxGeometry height="25" width="250" x="55" y="305" as="geometry" />
+        </mxCell>
+        <mxCell id="process" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#BBDEFB;strokeColor=#1565C0;" value="&lt;b&gt;Process Management&lt;/b&gt;&lt;br&gt;64 PCB slots&lt;br&gt;fork / exec / wait / waitpid&lt;br&gt;uid/gid/euid/egid&lt;br&gt;Setuid/setgid binaries" vertex="1">
+          <mxGeometry height="100" width="200" x="60" y="335" as="geometry" />
+        </mxCell>
+        <mxCell id="scheduler" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#BBDEFB;strokeColor=#1565C0;" value="&lt;b&gt;Scheduler&lt;/b&gt;&lt;br&gt;Round-robin preemptive&lt;br&gt;100ms quantum&lt;br&gt;PIT @ 100Hz&lt;br&gt;context_switch.asm" vertex="1">
+          <mxGeometry height="100" width="190" x="280" y="335" as="geometry" />
+        </mxCell>
+        <mxCell id="signals" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#BBDEFB;strokeColor=#1565C0;" value="&lt;b&gt;Signals&lt;/b&gt;&lt;br&gt;SIGINT, SIGKILL, SIGTERM&lt;br&gt;SIGCHLD, SIGPIPE&lt;br&gt;sigaction / sigreturn&lt;br&gt;Default + custom handlers" vertex="1">
+          <mxGeometry height="100" width="200" x="490" y="335" as="geometry" />
+        </mxCell>
+        <mxCell id="security" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#90CAF9;strokeColor=#0D47A1;strokeWidth=2;" value="&lt;b&gt;Security (cred.c)&lt;/b&gt;&lt;br&gt;Unix permission model&lt;br&gt;Owner/group/other rwx&lt;br&gt;Root bypass, setuid&lt;br&gt;chmod / chown" vertex="1">
+          <mxGeometry height="100" width="180" x="710" y="335" as="geometry" />
+        </mxCell>
+        <mxCell id="network" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#BBDEFB;strokeColor=#1565C0;" value="&lt;b&gt;Networking Stack&lt;/b&gt;&lt;br&gt;BSD Sockets, TCP/UDP/ICMP&lt;br&gt;Non-blocking (O_NONBLOCK)&lt;br&gt;sendfile, dual-pool netbufs&lt;br&gt;Refcounted buffers" vertex="1">
+          <mxGeometry height="100" width="200" x="910" y="335" as="geometry" />
+        </mxCell>
+        <mxCell id="debug" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#BBDEFB;strokeColor=#1565C0;" value="&lt;b&gt;Debug (COM1)&lt;/b&gt;&lt;br&gt;Serial 38400 8-N-1&lt;br&gt;debug_printf&lt;br&gt;VGA auto-mirror" vertex="1">
+          <mxGeometry height="100" width="170" x="1130" y="335" as="geometry" />
+        </mxCell>
+        <mxCell id="boot_info" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#BBDEFB;strokeColor=#1565C0;" value="&lt;b&gt;Driver Model&lt;/b&gt;&lt;br&gt;struct driver_info&lt;br&gt;probe / init / remove&lt;br&gt;driver_probe_all()&lt;br&gt;64 device registry" vertex="1">
+          <mxGeometry height="100" width="170" x="1340" y="335" as="geometry" />
+        </mxCell>
+        <mxCell id="mem_group" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FFF3E0;strokeColor=#E65100;strokeWidth=2;arcSize=6;" value="" vertex="1">
+          <mxGeometry height="180" width="740" x="40" y="510" as="geometry" />
+        </mxCell>
+        <mxCell id="mem_label" parent="1" style="text;html=1;fontSize=14;fontStyle=1;align=left;fontColor=#BF360C;" value="MEMORY MANAGEMENT" vertex="1">
+          <mxGeometry height="25" width="250" x="55" y="515" as="geometry" />
+        </mxCell>
+        <mxCell id="pmm" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FFE0B2;strokeColor=#E65100;" value="&lt;b&gt;PMM&lt;/b&gt;&lt;br&gt;Bitmap + refcount&lt;br&gt;4KB pages, ≤512 MB&lt;br&gt;Swap trigger &amp;lt;32 free" vertex="1">
+          <mxGeometry height="90" width="155" x="60" y="545" as="geometry" />
+        </mxCell>
+        <mxCell id="vmm" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FFE0B2;strokeColor=#E65100;" value="&lt;b&gt;VMM&lt;/b&gt;&lt;br&gt;4-level paging&lt;br&gt;PML4→PDPT→PD→PT&lt;br&gt;Higher-half kernel" vertex="1">
+          <mxGeometry height="90" width="155" x="230" y="545" as="geometry" />
+        </mxCell>
+        <mxCell id="kheap" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FFE0B2;strokeColor=#E65100;" value="&lt;b&gt;Kernel Heap&lt;/b&gt;&lt;br&gt;Free-list allocator&lt;br&gt;First-fit + coalesce&lt;br&gt;4 MB @ 0x...90000000" vertex="1">
+          <mxGeometry height="90" width="175" x="400" y="545" as="geometry" />
+        </mxCell>
+        <mxCell id="user_vm" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FFE0B2;strokeColor=#E65100;" value="&lt;b&gt;User VM&lt;/b&gt;&lt;br&gt;COW fork, mmap/brk&lt;br&gt;Demand paging (VMA_ELF)&lt;br&gt;Swap (CLOCK eviction)&lt;br&gt;Page cache, Rmap" vertex="1">
+          <mxGeometry height="90" width="170" x="590" y="545" as="geometry" />
+        </mxCell>
+        <mxCell id="fs_group" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#F3E5F5;strokeColor=#6A1B9A;strokeWidth=2;arcSize=6;" value="" vertex="1">
+          <mxGeometry height="180" width="760" x="800" y="510" as="geometry" />
+        </mxCell>
+        <mxCell id="fs_label" parent="1" style="text;html=1;fontSize=14;fontStyle=1;align=left;fontColor=#4A148C;" value="FILESYSTEMS &amp; STORAGE" vertex="1">
+          <mxGeometry height="25" width="250" x="815" y="515" as="geometry" />
+        </mxCell>
+        <mxCell id="vfs" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;" value="&lt;b&gt;VFS Layer&lt;/b&gt;&lt;br&gt;open / read / write / close&lt;br&gt;Mount points&lt;br&gt;Node table" vertex="1">
+          <mxGeometry height="90" width="140" x="820" y="545" as="geometry" />
+        </mxCell>
+        <mxCell id="ext2" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;" value="&lt;b&gt;ext2 R/W&lt;/b&gt;&lt;br&gt;Block cache (256)&lt;br&gt;WAL journal&lt;br&gt;Dirs, files, perms" vertex="1">
+          <mxGeometry height="90" width="140" x="970" y="545" as="geometry" />
+        </mxCell>
+        <mxCell id="ramfs" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;" value="&lt;b&gt;RAMFS&lt;/b&gt;&lt;br&gt;.rodata backed" vertex="1">
+          <mxGeometry height="40" width="100" x="1120" y="545" as="geometry" />
+        </mxCell>
+        <mxCell id="procfs" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;" value="&lt;b&gt;procfs&lt;/b&gt;&lt;br&gt;/proc/&lt;pid&gt;/*" vertex="1">
+          <mxGeometry height="40" width="100" x="1230" y="545" as="geometry" />
+        </mxCell>
+        <mxCell id="devfs" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;" value="&lt;b&gt;devfs&lt;/b&gt;&lt;br&gt;Hierarchical /dev/*" vertex="1">
+          <mxGeometry height="40" width="120" x="1120" y="595" as="geometry" />
+        </mxCell>
+        <mxCell id="pipes" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;" value="&lt;b&gt;Pipes&lt;/b&gt;&lt;br&gt;4KB ring buf" vertex="1">
+          <mxGeometry height="40" width="100" x="1250" y="595" as="geometry" />
+        </mxCell>
+        <mxCell id="epoll" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;" value="&lt;b&gt;epoll / poll&lt;/b&gt;&lt;br&gt;Edge-triggered (EPOLLET)" vertex="1">
+          <mxGeometry height="40" width="160" x="1360" y="545" as="geometry" />
+        </mxCell>
+        <mxCell id="journal" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;" value="&lt;b&gt;Journal&lt;/b&gt;&lt;br&gt;Redo WAL" vertex="1">
+          <mxGeometry height="40" width="100" x="1360" y="595" as="geometry" />
+        </mxCell>
+        <mxCell id="arch_group" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#ECEFF1;strokeColor=#37474F;strokeWidth=2;arcSize=6;" value="" vertex="1">
+          <mxGeometry height="170" width="1520" x="40" y="700" as="geometry" />
+        </mxCell>
+        <mxCell id="arch_label" parent="1" style="text;html=1;fontSize=14;fontStyle=1;align=left;fontColor=#263238;" value="ARCH / x86_64 + DRIVERS" vertex="1">
+          <mxGeometry height="25" width="300" x="55" y="705" as="geometry" />
+        </mxCell>
+        <mxCell id="gdt" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#CFD8DC;strokeColor=#37474F;" value="&lt;b&gt;GDT&lt;/b&gt;&lt;br&gt;6 segments&lt;br&gt;+ TSS" vertex="1">
+          <mxGeometry height="65" width="100" x="60" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="idt" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#CFD8DC;strokeColor=#37474F;" value="&lt;b&gt;IDT&lt;/b&gt;&lt;br&gt;256 entries&lt;br&gt;ISR stubs" vertex="1">
+          <mxGeometry height="65" width="100" x="170" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="pic" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#CFD8DC;strokeColor=#37474F;" value="&lt;b&gt;8259 PIC&lt;/b&gt;&lt;br&gt;IRQ 0-15&lt;br&gt;→ INT 32-47" vertex="1">
+          <mxGeometry height="65" width="110" x="280" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="kbd_drv" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#CFD8DC;strokeColor=#37474F;" value="&lt;b&gt;Keyboard&lt;/b&gt;&lt;br&gt;PS/2, IRQ 1&lt;br&gt;Scan Set 1" vertex="1">
+          <mxGeometry height="65" width="110" x="400" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="mouse_drv" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#CFD8DC;strokeColor=#37474F;" value="&lt;b&gt;Mouse&lt;/b&gt;&lt;br&gt;PS/2, IRQ 12&lt;br&gt;3-byte pkt" vertex="1">
+          <mxGeometry height="65" width="100" x="520" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="pit_drv" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#CFD8DC;strokeColor=#37474F;" value="&lt;b&gt;PIT&lt;/b&gt;&lt;br&gt;IRQ 0, 100Hz&lt;br&gt;scheduler tick" vertex="1">
+          <mxGeometry height="65" width="100" x="630" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="vga_drv" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#CFD8DC;strokeColor=#37474F;" value="&lt;b&gt;VGA Text&lt;/b&gt;&lt;br&gt;80x25&lt;br&gt;vga_printf" vertex="1">
+          <mxGeometry height="65" width="90" x="740" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="fb_drv" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#CFD8DC;strokeColor=#37474F;" value="&lt;b&gt;Framebuffer&lt;/b&gt;&lt;br&gt;32bpp VESA&lt;br&gt;/dev/fb0" vertex="1">
+          <mxGeometry height="65" width="100" x="840" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="ata_drv" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#CFD8DC;strokeColor=#37474F;" value="&lt;b&gt;ATA PIO&lt;/b&gt;&lt;br&gt;LBA28 R/W&lt;br&gt;/dev/disk/sda" vertex="1">
+          <mxGeometry height="65" width="100" x="950" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="pci_drv" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#CFD8DC;strokeColor=#37474F;" value="&lt;b&gt;PCI Bus&lt;/b&gt;&lt;br&gt;Enumerate&lt;br&gt;Config space" vertex="1">
+          <mxGeometry height="65" width="100" x="1060" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="e1000_drv" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#CFD8DC;strokeColor=#37474F;" value="&lt;b&gt;e1000 NIC&lt;/b&gt;&lt;br&gt;DMA TX/RX&lt;br&gt;Ethernet" vertex="1">
+          <mxGeometry height="65" width="100" x="1170" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="dev_random" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#CFD8DC;strokeColor=#37474F;" value="&lt;b&gt;/dev/random&lt;/b&gt;&lt;br&gt;xorshift64&lt;br&gt;PRNG" vertex="1">
+          <mxGeometry height="65" width="100" x="1280" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="serial_drv" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#CFD8DC;strokeColor=#37474F;" value="&lt;b&gt;COM1&lt;/b&gt;&lt;br&gt;38400 baud&lt;br&gt;&lt;b&gt;/dev/input&lt;/b&gt;&lt;br&gt;kbd + mouse" vertex="1">
+          <mxGeometry height="65" width="100" x="1390" y="735" as="geometry" />
+        </mxCell>
+        <mxCell id="hw_group" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FCE4EC;strokeColor=#C62828;strokeWidth=2;arcSize=6;" value="" vertex="1">
+          <mxGeometry height="70" width="1520" x="40" y="880" as="geometry" />
+        </mxCell>
+        <mxCell id="hw_label" parent="1" style="text;html=1;fontSize=12;fontStyle=1;align=center;fontColor=#B71C1C;" value="HARDWARE — x86_64 CPU • RAM (≤512 MB) • ATA Disk • PS/2 Keyboard &amp; Mouse • PCI Bus • e1000 NIC • VGA/VESA • PIT • PIC 8259 • COM1 Serial" vertex="1">
+          <mxGeometry height="30" width="1480" x="60" y="895" as="geometry" />
+        </mxCell>
+        <mxCell id="boot_group" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FFF9C4;strokeColor=#F9A825;strokeWidth=2;arcSize=6;" value="" vertex="1">
+          <mxGeometry height="60" width="1520" x="40" y="960" as="geometry" />
+        </mxCell>
+        <mxCell id="boot_label" parent="1" style="text;html=1;fontSize=12;fontStyle=1;align=center;fontColor=#F57F17;" value="BOOT — GRUB2 (Multiboot2) → boot.asm (32→64 bit, page tables, GDT) → kernel_main() — VMA: 0xFFFFFFFF80000000" vertex="1">
+          <mxGeometry height="25" width="1480" x="60" y="975" as="geometry" />
+        </mxCell>
+        <mxCell id="e1" edge="1" parent="1" source="user_progs" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#666666;" target="user_syscall">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="shared_libs" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#666666;" target="user_syscall">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="user_syscall" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#D32F2F;strokeWidth=2;" target="security">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="shell" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#666666;" target="process">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="scheduler" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#666666;dashed=1;" target="pit_drv">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="network" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#666666;dashed=1;" target="e1000_drv">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="ext2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#666666;dashed=1;" target="ata_drv">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="vfs" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6A1B9A;" target="ext2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="vfs" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6A1B9A;" target="ramfs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="process" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#666666;" target="user_vm">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="vmm" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#E65100;" target="pmm">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e12" edge="1" parent="1" source="user_vm" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#E65100;" target="vmm">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="1" source="e1000_drv" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#37474F;" target="pci_drv">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="1" source="wm" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#666666;dashed=1;" target="fb_drv">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" edge="1" parent="1" source="wm" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#666666;dashed=1;" target="mouse_drv">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_box" parent="1" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FAFAFA;strokeColor=#BDBDBD;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="70" width="500" x="40" y="1030" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_title" parent="1" style="text;html=1;fontSize=11;align=left;" value="&lt;b&gt;Legend&lt;/b&gt;" vertex="1">
+          <mxGeometry height="20" width="60" x="50" y="1035" as="geometry" />
+        </mxCell>
+        <mxCell id="legend1" parent="1" style="shape=line;strokeColor=#D32F2F;strokeWidth=3;" value="" vertex="1">
+          <mxGeometry height="10" width="40" x="50" y="1062" as="geometry" />
+        </mxCell>
+        <mxCell id="legend1t" parent="1" style="text;html=1;fontSize=10;align=left;" value="Syscall boundary" vertex="1">
+          <mxGeometry height="20" width="100" x="95" y="1055" as="geometry" />
+        </mxCell>
+        <mxCell id="legend2" parent="1" style="shape=line;strokeColor=#666666;strokeWidth=1;strokeDashArray=4 4;" value="" vertex="1">
+          <mxGeometry height="10" width="40" x="200" y="1062" as="geometry" />
+        </mxCell>
+        <mxCell id="legend2t" parent="1" style="text;html=1;fontSize=10;align=left;" value="Hardware access" vertex="1">
+          <mxGeometry height="20" width="100" x="245" y="1055" as="geometry" />
+        </mxCell>
+        <mxCell id="legend3" parent="1" style="shape=line;strokeColor=#666666;strokeWidth=1;" value="" vertex="1">
+          <mxGeometry height="10" width="40" x="350" y="1062" as="geometry" />
+        </mxCell>
+        <mxCell id="legend3t" parent="1" style="text;html=1;fontSize=10;align=left;" value="Data flow" vertex="1">
+          <mxGeometry height="20" width="80" x="395" y="1055" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="roadmap" name="Roadmap">
+    <mxGraphModel dx="1800" dy="1400" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1400" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <!-- Title -->
+        <mxCell id="rm_title" value="HobbyOS — Development Roadmap" style="text;html=1;fontSize=24;fontStyle=1;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="300" y="10" width="1000" height="40" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_subtitle" value="Current: 48 syscalls • 18 shell commands • 45+ user programs • Networking • ext2 R/W + Journal • Demand Paging + Swap • Security Model" style="text;html=1;fontSize=12;fontStyle=2;align=center;fontColor=#666666;" vertex="1" parent="1">
+          <mxGeometry x="250" y="48" width="1100" height="22" as="geometry" />
+        </mxCell>
+        <!-- ═══════════ COMPLETED ═══════════ -->
+        <mxCell id="done_group" value="" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#F1F8E9;strokeColor=#558B2F;strokeWidth=3;arcSize=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="85" width="1520" height="200" as="geometry" />
+        </mxCell>
+        <mxCell id="done_label" value="COMPLETED (Phases 16-20)" style="text;html=1;fontSize=16;fontStyle=1;align=left;fontColor=#33691E;" vertex="1" parent="1">
+          <mxGeometry x="60" y="95" width="400" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="done_badge" value="DONE" style="text;html=1;fontSize=13;fontStyle=1;align=right;fontColor=#2E7D32;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="95" width="190" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="d1" value="&lt;b&gt;Free-List Allocator&lt;/b&gt;&lt;hr&gt;Replaced bump kheap with&lt;br&gt;first-fit + coalescing.&lt;br&gt;kfree() now works!" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#DCEDC8;strokeColor=#558B2F;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="60" y="130" width="175" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d2" value="&lt;b&gt;Demand Paging + Swap&lt;/b&gt;&lt;hr&gt;VMA_ELF lazy page alloc.&lt;br&gt;CLOCK eviction to 16MB swap.&lt;br&gt;Rmap + page cache (512)." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#DCEDC8;strokeColor=#558B2F;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="245" y="130" width="195" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d3" value="&lt;b&gt;Security Model&lt;/b&gt;&lt;hr&gt;uid/gid/euid/egid, cred.c,&lt;br&gt;chmod/chown, setuid binaries.&lt;br&gt;7 new syscalls (40-46)." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#DCEDC8;strokeColor=#558B2F;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="450" y="130" width="180" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d4" value="&lt;b&gt;Storage Reliability&lt;/b&gt;&lt;hr&gt;Block cache (256, hash+LRU).&lt;br&gt;Write-ahead journal (redo).&lt;br&gt;sync shell command." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#DCEDC8;strokeColor=#558B2F;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="640" y="130" width="180" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d5" value="&lt;b&gt;Device Management&lt;/b&gt;&lt;hr&gt;64-device registry, device_ops.&lt;br&gt;Driver model (probe/init).&lt;br&gt;Hierarchical devfs, /dev/random." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#DCEDC8;strokeColor=#558B2F;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="830" y="130" width="205" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d6" value="&lt;b&gt;Advanced Networking&lt;/b&gt;&lt;hr&gt;Non-blocking sockets, EPOLLET.&lt;br&gt;sendfile, dual-pool netbufs&lt;br&gt;with refcounting. fcntl." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#DCEDC8;strokeColor=#558B2F;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="1045" y="130" width="200" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="d7" value="&lt;b&gt;New Programs&lt;/b&gt;&lt;hr&gt;id, whoami, demand_test&lt;br&gt;perm_test, nonblock_test&lt;br&gt;+6 host test suites" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#DCEDC8;strokeColor=#558B2F;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="1255" y="130" width="175" height="90" as="geometry" />
+        </mxCell>
+        <!-- ═══════════ TIER 1 ═══════════ -->
+        <mxCell id="t1_group" value="" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E8F5E9;strokeColor=#2E7D32;strokeWidth=3;arcSize=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="300" width="1520" height="220" as="geometry" />
+        </mxCell>
+        <mxCell id="t1_label" value="TIER 1 — Foundation Gaps (High Impact, Medium Effort)" style="text;html=1;fontSize=16;fontStyle=1;align=left;fontColor=#1B5E20;" vertex="1" parent="1">
+          <mxGeometry x="60" y="310" width="500" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="t1_priority" value="DO NEXT" style="text;html=1;fontSize=13;fontStyle=1;align=right;fontColor=#C62828;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="310" width="190" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="t1_2" value="&lt;b&gt;Kernel Threads&lt;/b&gt;&lt;hr&gt;Lightweight tasks sharing the&lt;br&gt;kernel address space. Needed&lt;br&gt;for background daemons,&lt;br&gt;async I/O workers." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#C8E6C9;strokeColor=#2E7D32;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="60" y="350" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t1_3" value="&lt;b&gt;Process Groups &amp;amp; Sessions&lt;/b&gt;&lt;hr&gt;setsid, setpgid, controlling&lt;br&gt;terminal. Required for proper&lt;br&gt;job control (fg/bg/jobs)." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#C8E6C9;strokeColor=#2E7D32;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="275" y="350" width="210" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t1_5" value="&lt;b&gt;Shell I/O Redirection&lt;/b&gt;&lt;hr&gt;Support &amp;gt;, &amp;gt;&amp;gt;, &amp;lt;, 2&amp;gt;&amp;amp;1&lt;br&gt;in the shell. Uses existing&lt;br&gt;dup2 + open syscalls." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#C8E6C9;strokeColor=#2E7D32;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="500" y="350" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t1_6" value="&lt;b&gt;DHCP Client&lt;/b&gt;&lt;hr&gt;Auto-configure IP instead of&lt;br&gt;hardcoded. UDP port 67/68.&lt;br&gt;&lt;br&gt;&lt;b&gt;DNS Resolver&lt;/b&gt;&lt;hr&gt;Hostname → IP lookup." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#C8E6C9;strokeColor=#2E7D32;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="715" y="350" width="200" height="150" as="geometry" />
+        </mxCell>
+        <mxCell id="t1_7" value="&lt;b&gt;User Accounts&lt;/b&gt;&lt;hr&gt;login program, /etc/passwd,&lt;br&gt;password hashing, su. Build&lt;br&gt;on Phase 17 credentials." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#C8E6C9;strokeColor=#2E7D32;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="930" y="350" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t1_8" value="&lt;b&gt;Integrate Block Cache&lt;/b&gt;&lt;hr&gt;Route ext2_read/write_block&lt;br&gt;through bcache. Currently&lt;br&gt;block cache exists but ext2&lt;br&gt;still does direct ATA I/O." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#C8E6C9;strokeColor=#2E7D32;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="1145" y="350" width="200" height="120" as="geometry" />
+        </mxCell>
+        <!-- Dependency arrow: Process Groups needed before Shell I/O -->
+        <mxCell id="t1_dep1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#2E7D32;strokeWidth=2;dashed=1;" edge="1" source="t1_3" target="t1_5" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <!-- ═══════════ TIER 2 ═══════════ -->
+        <mxCell id="t2_group" value="" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E3F2FD;strokeColor=#1565C0;strokeWidth=3;arcSize=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="535" width="1520" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="t2_label" value="TIER 2 — Hardware &amp; Performance (Medium Impact, High Effort)" style="text;html=1;fontSize=16;fontStyle=1;align=left;fontColor=#0D47A1;" vertex="1" parent="1">
+          <mxGeometry x="60" y="545" width="550" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="t2_priority" value="PERFORMANCE" style="text;html=1;fontSize=13;fontStyle=1;align=right;fontColor=#E65100;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="545" width="190" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="t2_1" value="&lt;b&gt;SMP / Multi-Core&lt;/b&gt;&lt;hr&gt;AP startup via SIPI, per-CPU&lt;br&gt;scheduler run queues, spinlocks&lt;br&gt;for shared data structures." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#BBDEFB;strokeColor=#1565C0;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="60" y="585" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t2_2" value="&lt;b&gt;APIC + IOAPIC&lt;/b&gt;&lt;hr&gt;Replace 8259 PIC. Required&lt;br&gt;for SMP. Parse MADT ACPI&lt;br&gt;table, per-CPU LAPIC." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#BBDEFB;strokeColor=#1565C0;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="280" y="585" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t2_3" value="&lt;b&gt;ATA DMA / AHCI&lt;/b&gt;&lt;hr&gt;Replace PIO disk I/O with&lt;br&gt;DMA transfers. AHCI for&lt;br&gt;SATA. Frees CPU." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#BBDEFB;strokeColor=#1565C0;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="500" y="585" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t2_4" value="&lt;b&gt;USB Stack&lt;/b&gt;&lt;hr&gt;xHCI/EHCI host controller.&lt;br&gt;HID class for USB keyboard&lt;br&gt;and mouse." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#BBDEFB;strokeColor=#1565C0;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="720" y="585" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t2_5" value="&lt;b&gt;ACPI&lt;/b&gt;&lt;hr&gt;Shutdown, reboot, power mgmt.&lt;br&gt;RSDP → RSDT → FADT/MADT.&lt;br&gt;CPU topology for SMP." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#BBDEFB;strokeColor=#1565C0;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="940" y="585" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t2_6" value="&lt;b&gt;Virtio Drivers&lt;/b&gt;&lt;hr&gt;virtio-blk, virtio-net.&lt;br&gt;Paravirtualized — faster&lt;br&gt;than emulated e1000/ATA." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#BBDEFB;strokeColor=#1565C0;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="1160" y="585" width="200" height="120" as="geometry" />
+        </mxCell>
+        <!-- SMP depends on APIC -->
+        <mxCell id="t2_dep1" value="requires" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C62828;strokeWidth=2;fontColor=#C62828;fontSize=10;" edge="1" source="t2_1" target="t2_2" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="t2_dep2" value="needs MADT" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C62828;strokeWidth=1;dashed=1;fontColor=#C62828;fontSize=9;" edge="1" source="t2_2" target="t2_5" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <!-- ═══════════ TIER 3 ═══════════ -->
+        <mxCell id="t3_group" value="" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FFF3E0;strokeColor=#E65100;strokeWidth=3;arcSize=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="780" width="1520" height="230" as="geometry" />
+        </mxCell>
+        <mxCell id="t3_label" value="TIER 3 — Userland &amp; UX (Medium Impact, Medium Effort)" style="text;html=1;fontSize=16;fontStyle=1;align=left;fontColor=#BF360C;" vertex="1" parent="1">
+          <mxGeometry x="60" y="790" width="500" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="t3_priority" value="USABILITY" style="text;html=1;fontSize=13;fontStyle=1;align=right;fontColor=#6A1B9A;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="790" width="190" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="t3_1" value="&lt;b&gt;POSIX termios&lt;/b&gt;&lt;hr&gt;Raw mode, cooked mode,&lt;br&gt;tcsetattr/tcgetattr. Enables&lt;br&gt;text editors, ncurses TUIs." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FFE0B2;strokeColor=#E65100;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="60" y="830" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t3_2" value="&lt;b&gt;Virtual Terminals&lt;/b&gt;&lt;hr&gt;Ctrl+Alt+F1..F6 switching.&lt;br&gt;Each VT has its own buffer,&lt;br&gt;input stream, and shell." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FFE0B2;strokeColor=#E65100;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="280" y="830" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t3_3" value="&lt;b&gt;Symlinks &amp;amp; Hardlinks&lt;/b&gt;&lt;hr&gt;Symbolic and hard links in&lt;br&gt;ext2. ln, readlink. Path&lt;br&gt;resolution follows symlinks." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FFE0B2;strokeColor=#E65100;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="500" y="830" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t3_4" value="&lt;b&gt;Shell Scripting&lt;/b&gt;&lt;hr&gt;Variables ($VAR), if/else,&lt;br&gt;while loops, script files&lt;br&gt;(#!/bin/sh), /etc/rc." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FFE0B2;strokeColor=#E65100;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="720" y="830" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t3_5" value="&lt;b&gt;Window Manager v2&lt;/b&gt;&lt;hr&gt;Real compositor with Z-order,&lt;br&gt;window decorations, move/&lt;br&gt;resize. Double buffering." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FFE0B2;strokeColor=#E65100;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="940" y="830" width="200" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="t3_6" value="&lt;b&gt;/tmp tmpfs&lt;/b&gt;&lt;hr&gt;RAM-backed temporary FS.&lt;br&gt;&lt;br&gt;&lt;b&gt;Zero-copy TCP RX&lt;/b&gt;&lt;hr&gt;Replace flat rx_buf with&lt;br&gt;netbuf queue." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FFE0B2;strokeColor=#E65100;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="1160" y="830" width="200" height="140" as="geometry" />
+        </mxCell>
+        <!-- ═══════════ TIER 4 ═══════════ -->
+        <mxCell id="t4_group" value="" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#F3E5F5;strokeColor=#6A1B9A;strokeWidth=3;arcSize=6;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1025" width="1520" height="270" as="geometry" />
+        </mxCell>
+        <mxCell id="t4_label" value="TIER 4 — Advanced OS Features (Lower Priority, High Effort)" style="text;html=1;fontSize=16;fontStyle=1;align=left;fontColor=#4A148C;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1035" width="550" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="t4_priority" value="STRETCH GOALS" style="text;html=1;fontSize=13;fontStyle=1;align=right;fontColor=#37474F;" vertex="1" parent="1">
+          <mxGeometry x="1350" y="1035" width="190" height="30" as="geometry" />
+        </mxCell>
+        <mxCell id="t4_1" value="&lt;b&gt;Futex / Mutex&lt;/b&gt;&lt;hr&gt;User-space synchronization.&lt;br&gt;Fast user path, slow kernel&lt;br&gt;wait queue path." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1075" width="180" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="t4_2" value="&lt;b&gt;pthreads Library&lt;/b&gt;&lt;hr&gt;pthread_create/join/mutex.&lt;br&gt;Requires kernel thread or&lt;br&gt;clone() support." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="255" y="1075" width="180" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="t4_3" value="&lt;b&gt;Shared Memory&lt;/b&gt;&lt;hr&gt;shmget/shmat or shm_open.&lt;br&gt;Fast zero-copy IPC for&lt;br&gt;cooperating processes." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="450" y="1075" width="180" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="t4_4" value="&lt;b&gt;NVMe Driver&lt;/b&gt;&lt;hr&gt;Modern SSD interface.&lt;br&gt;Queue-based, MSI-X&lt;br&gt;interrupts." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="645" y="1075" width="180" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="t4_5" value="&lt;b&gt;Sound (AC97/HDA)&lt;/b&gt;&lt;hr&gt;Audio output via AC97 or&lt;br&gt;Intel HD Audio. PCM&lt;br&gt;playback, DMA buffers." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="840" y="1075" width="180" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="t4_6" value="&lt;b&gt;TLS / SSL&lt;/b&gt;&lt;hr&gt;HTTPS support. Crypto&lt;br&gt;primitives, TLS 1.2+&lt;br&gt;handshake, certificates." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="1035" y="1075" width="180" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="t4_7" value="&lt;b&gt;Self-Hosting&lt;/b&gt;&lt;hr&gt;Port a C compiler (tcc?)&lt;br&gt;to compile programs within&lt;br&gt;the OS itself." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="60" y="1190" width="180" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="t4_8" value="&lt;b&gt;Slab Allocator&lt;/b&gt;&lt;hr&gt;Object caches for common&lt;br&gt;sizes (PCB, page tables).&lt;br&gt;Upgrade from free-list." style="html=1;rounded=1;whiteSpace=wrap;fillColor=#E1BEE7;strokeColor=#6A1B9A;align=left;spacingLeft=8;spacingRight=8;verticalAlign=top;" vertex="1" parent="1">
+          <mxGeometry x="255" y="1190" width="180" height="90" as="geometry" />
+        </mxCell>
+        <!-- Dependency: pthreads needs futex -->
+        <mxCell id="t4_dep1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#6A1B9A;strokeWidth=1;dashed=1;" edge="1" source="t4_1" target="t4_2" parent="1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <!-- ═══════════ LEGEND ═══════════ -->
+        <mxCell id="rm_legend" value="" style="html=1;rounded=1;whiteSpace=wrap;fillColor=#FAFAFA;strokeColor=#BDBDBD;" vertex="1" parent="1">
+          <mxGeometry x="40" y="1310" width="900" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_legend_title" value="&lt;b&gt;Legend&lt;/b&gt;" style="text;html=1;fontSize=11;align=left;" vertex="1" parent="1">
+          <mxGeometry x="55" y="1315" width="60" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_l0" value="" style="rounded=1;fillColor=#DCEDC8;strokeColor=#558B2F;" vertex="1" parent="1">
+          <mxGeometry x="55" y="1340" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_l0t" value="Completed" style="text;html=1;fontSize=10;align=left;" vertex="1" parent="1">
+          <mxGeometry x="76" y="1337" width="70" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_l1" value="" style="rounded=1;fillColor=#C8E6C9;strokeColor=#2E7D32;" vertex="1" parent="1">
+          <mxGeometry x="155" y="1340" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_l1t" value="Tier 1: Foundation" style="text;html=1;fontSize=10;align=left;" vertex="1" parent="1">
+          <mxGeometry x="176" y="1337" width="100" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_l2" value="" style="rounded=1;fillColor=#BBDEFB;strokeColor=#1565C0;" vertex="1" parent="1">
+          <mxGeometry x="285" y="1340" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_l2t" value="Tier 2: Hardware" style="text;html=1;fontSize=10;align=left;" vertex="1" parent="1">
+          <mxGeometry x="306" y="1337" width="100" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_l3" value="" style="rounded=1;fillColor=#FFE0B2;strokeColor=#E65100;" vertex="1" parent="1">
+          <mxGeometry x="415" y="1340" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_l3t" value="Tier 3: Userland" style="text;html=1;fontSize=10;align=left;" vertex="1" parent="1">
+          <mxGeometry x="436" y="1337" width="100" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_l4" value="" style="rounded=1;fillColor=#E1BEE7;strokeColor=#6A1B9A;" vertex="1" parent="1">
+          <mxGeometry x="545" y="1340" width="16" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_l4t" value="Tier 4: Advanced" style="text;html=1;fontSize=10;align=left;" vertex="1" parent="1">
+          <mxGeometry x="566" y="1337" width="100" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_l5" value="" style="shape=line;strokeColor=#C62828;strokeWidth=2;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="680" y="1345" width="30" height="10" as="geometry" />
+        </mxCell>
+        <mxCell id="rm_l5t" value="Dependency" style="text;html=1;fontSize=10;align=left;" vertex="1" parent="1">
+          <mxGeometry x="715" y="1337" width="80" height="20" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

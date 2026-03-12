@@ -88,12 +88,15 @@ typedef struct {
 #define ELF64_R_SYM(i)  ((uint32_t)((i)>>32))
 
 /* Rename conflicting symbols before including elf_loader.c */
-#define pmm_alloc_page    elf_test_pmm_alloc_page
-#define user_vm_map_page  elf_test_user_vm_map_page
-#define debug_printf      elf_test_debug_printf
-#define ext2_is_mounted   elf_test_ext2_is_mounted
-#define ext2_path_lookup  elf_test_ext2_path_lookup
-#define kmalloc           elf_test_kmalloc
+#define pmm_alloc_page        elf_test_pmm_alloc_page
+#define user_vm_map_page      elf_test_user_vm_map_page
+#define debug_printf          elf_test_debug_printf
+#define ext2_is_mounted       elf_test_ext2_is_mounted
+#define ext2_path_lookup      elf_test_ext2_path_lookup
+#define kmalloc               elf_test_kmalloc
+#define kfree                 elf_test_kfree
+#define scheduler_get_current elf_test_scheduler_get_current
+#define vma_alloc             elf_test_vma_alloc
 
 static uint64_t elf_test_alloc_counter = 0;
 /* Allocate real pages via malloc for host-side testing */
@@ -117,6 +120,39 @@ static void elf_test_debug_printf(const char *fmt, ...) { (void)fmt; }
 static bool elf_test_ext2_is_mounted(void) { return false; }
 static uint32_t elf_test_ext2_path_lookup(const char *p) { (void)p; return 0; }
 static void *elf_test_kmalloc(size_t s) { (void)s; return NULL; }
+static void elf_test_kfree(void *p) { (void)p; }
+
+/* Minimal process struct for scheduler_get_current stub */
+struct process {
+    int dummy;
+};
+static struct process elf_test_proc;
+static struct process *elf_test_scheduler_get_current(void) { return &elf_test_proc; }
+
+/* vma_t for mmap.h stub */
+typedef struct {
+    uint64_t start;
+    uint64_t end;
+    uint32_t prot;
+    uint32_t flags;
+    uint8_t  type;
+    bool     in_use;
+    uint32_t file_inode;
+    uint64_t file_offset;
+    uint64_t shared_phys;
+    uint64_t dev_phys_base;
+    const uint8_t *elf_data;
+    uint64_t elf_data_filesz;
+    uint64_t elf_vaddr;
+    bool elf_data_owned;
+} vma_t;
+
+static vma_t elf_test_vma_storage;
+static vma_t *elf_test_vma_alloc(struct process *proc) {
+    (void)proc;
+    memset(&elf_test_vma_storage, 0, sizeof(elf_test_vma_storage));
+    return &elf_test_vma_storage;
+}
 
 /* ext2 inode struct (minimal — for elf_loader.c compilation) */
 struct ext2_inode {
@@ -161,6 +197,9 @@ struct elf_load_result {
 #define PMM_H
 #define VMM_H
 #define USER_VM_H
+#define MMAP_H
+#define SCHEDULER_H
+#define PROCESS_H
 #define STRING_H
 #define DEBUG_H
 #define KHEAP_H
@@ -171,6 +210,24 @@ struct elf_load_result {
 #define PTE_WRITABLE (1ULL << 1)
 #define PTE_USER     (1ULL << 2)
 #define PTE_NX       (1ULL << 63)
+
+/* VMA type constants needed by elf_loader.c */
+#define VMA_MAX   32
+#define VMA_ANON  0
+#define VMA_FILE  1
+#define VMA_DEVICE 2
+#define VMA_ELF   3
+
+/* mmap prot/flags constants needed by elf_loader.c */
+#define PROT_NONE      0
+#define PROT_READ      1
+#define PROT_WRITE     2
+#define PROT_EXEC      4
+#define MAP_SHARED     1
+#define MAP_PRIVATE    2
+#define MAP_ANONYMOUS  0x20
+#define MAP_FIXED      0x10
+#define MAP_FAILED     ((void *)-1)
 
 /* Include the actual elf_loader.c source */
 #include "../kernel/elf/elf_loader.c"
@@ -183,6 +240,9 @@ struct elf_load_result {
 #undef ext2_read_inode
 #undef ext2_read_file
 #undef kmalloc
+#undef kfree
+#undef scheduler_get_current
+#undef vma_alloc
 
 /* Helper to build a minimal valid ELF64 header + program header */
 static void make_valid_elf(uint8_t *buf, size_t bufsize) {
@@ -299,7 +359,7 @@ static void test_elf_load_entry_point(void) {
     elf_test_alloc_counter = 0;
 
     struct elf_load_result result;
-    int ret = elf_load(0x1000, buf, sizeof(buf), 0, &result);
+    int ret = elf_load(0x1000, buf, sizeof(buf), 0, &result, NULL);
     TEST("elf_load succeeds", ret == 0);
     TEST("entry point is 0x400000", result.entry_point == 0x400000);
 }
