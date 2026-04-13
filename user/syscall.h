@@ -73,7 +73,12 @@ typedef uint64_t           size_t;
 #define O_NONBLOCK  0x800
 
 /* Open flags */
-#define O_CREAT         0x40
+#define O_RDONLY   0x00
+#define O_WRONLY   0x01
+#define O_RDWR     0x02
+#define O_CREAT    0x40
+#define O_TRUNC    0x200
+#define O_APPEND   0x400
 
 /* Stat file types */
 #define STAT_FILE  1

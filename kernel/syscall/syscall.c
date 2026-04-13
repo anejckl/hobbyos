@@ -209,27 +209,35 @@ static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
         return;
     }
 
-    /* Allocate and map user stack page */
-    uint64_t stack_phys = pmm_alloc_page();
-    if (!stack_phys) {
-        debug_printf("syscall: exec '%s' stack alloc failed\n", name_buf);
-        user_vm_destroy_address_space(new_cr3);
-        frame->rax = (uint64_t)-1;
-        return;
+    /* Allocate and map user stack pages */
+    uint64_t stack_pages_exec[USER_STACK_PAGES];
+    for (int i = 0; i < USER_STACK_PAGES; i++) {
+        stack_pages_exec[i] = pmm_alloc_page();
+        if (!stack_pages_exec[i]) {
+            debug_printf("syscall: exec '%s' stack alloc failed\n", name_buf);
+            for (int j = 0; j < i; j++) pmm_free_page(stack_pages_exec[j]);
+            user_vm_destroy_address_space(new_cr3);
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        memset(PHYS_TO_VIRT(stack_pages_exec[i]), 0, PAGE_SIZE);
     }
-    memset(PHYS_TO_VIRT(stack_phys), 0, PAGE_SIZE);
-    if (user_vm_map_page(new_cr3, USER_STACK_BOTTOM,
-                         stack_phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER) < 0) {
-        pmm_free_page(stack_phys);
-        user_vm_destroy_address_space(new_cr3);
-        frame->rax = (uint64_t)-1;
-        return;
+    for (int i = 0; i < USER_STACK_PAGES; i++) {
+        uint64_t vaddr = USER_STACK_BOTTOM + (uint64_t)i * PAGE_SIZE;
+        if (user_vm_map_page(new_cr3, vaddr,
+                             stack_pages_exec[i], PTE_PRESENT | PTE_WRITABLE | PTE_USER) < 0) {
+            for (int j = 0; j < USER_STACK_PAGES; j++) pmm_free_page(stack_pages_exec[j]);
+            user_vm_destroy_address_space(new_cr3);
+            frame->rax = (uint64_t)-1;
+            return;
+        }
     }
+    uint64_t stack_phys = stack_pages_exec[USER_STACK_PAGES - 1];
 
     /* Set up argv stack before destroying old address space */
     const char *exec_argv[1] = { name_buf };
     uint64_t entry_rsp, entry_argv_ptr;
-    if (elf_setup_stack(stack_phys, USER_STACK_BOTTOM, 1, exec_argv,
+    if (elf_setup_stack(stack_phys, USER_STACK_TOP - PAGE_SIZE, 1, exec_argv,
                         &elf_result, &entry_rsp, &entry_argv_ptr) < 0) {
         user_vm_destroy_address_space(new_cr3);
         frame->rax = (uint64_t)-1;
@@ -384,6 +392,9 @@ static void syscall_execv(struct interrupt_frame *frame,
     }
     if (!prog_data)
         prog_data = ramfs_get_file_data(name_buf, &prog_size);
+    /* Try basename fallback for RAMFS (files stored as "echo", not "/bin/echo") */
+    if (!prog_data)
+        prog_data = ramfs_get_file_data(base, &prog_size);
 
     if (!prog_data) {
         debug_printf("syscall: execv '%s' not found\n", name_buf);
@@ -412,23 +423,31 @@ static void syscall_execv(struct interrupt_frame *frame,
         return;
     }
 
-    uint64_t stack_phys = pmm_alloc_page();
-    if (!stack_phys) {
-        user_vm_destroy_address_space(new_cr3);
-        frame->rax = (uint64_t)-1;
-        return;
+    uint64_t stack_pages_v[USER_STACK_PAGES];
+    for (int i = 0; i < USER_STACK_PAGES; i++) {
+        stack_pages_v[i] = pmm_alloc_page();
+        if (!stack_pages_v[i]) {
+            for (int j = 0; j < i; j++) pmm_free_page(stack_pages_v[j]);
+            user_vm_destroy_address_space(new_cr3);
+            frame->rax = (uint64_t)-1;
+            return;
+        }
+        memset(PHYS_TO_VIRT(stack_pages_v[i]), 0, PAGE_SIZE);
     }
-    memset(PHYS_TO_VIRT(stack_phys), 0, PAGE_SIZE);
-    if (user_vm_map_page(new_cr3, USER_STACK_BOTTOM,
-                         stack_phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER) < 0) {
-        pmm_free_page(stack_phys);
-        user_vm_destroy_address_space(new_cr3);
-        frame->rax = (uint64_t)-1;
-        return;
+    for (int i = 0; i < USER_STACK_PAGES; i++) {
+        uint64_t vaddr = USER_STACK_BOTTOM + (uint64_t)i * PAGE_SIZE;
+        if (user_vm_map_page(new_cr3, vaddr,
+                             stack_pages_v[i], PTE_PRESENT | PTE_WRITABLE | PTE_USER) < 0) {
+            for (int j = 0; j < USER_STACK_PAGES; j++) pmm_free_page(stack_pages_v[j]);
+            user_vm_destroy_address_space(new_cr3);
+            frame->rax = (uint64_t)-1;
+            return;
+        }
     }
+    uint64_t stack_phys = stack_pages_v[USER_STACK_PAGES - 1];
 
     uint64_t entry_rsp, entry_argv_ptr;
-    if (elf_setup_stack(stack_phys, USER_STACK_BOTTOM, argc, kern_argv,
+    if (elf_setup_stack(stack_phys, USER_STACK_TOP - PAGE_SIZE, argc, kern_argv,
                         &elf_result, &entry_rsp, &entry_argv_ptr) < 0) {
         user_vm_destroy_address_space(new_cr3);
         frame->rax = (uint64_t)-1;
@@ -1231,6 +1250,11 @@ static void syscall_handler(struct interrupt_frame *frame) {
                                 return;
                             }
                         }
+                        /* O_TRUNC: truncate existing file */
+                        if (flags & 0x200) {
+                            chk_inode.i_size = 0;
+                            ext2_write_inode(ino, &chk_inode);
+                        }
                         /* Found on ext2 — create FD_EXT2 */
                         int fd = process_fd_alloc(cur, 3);
                         if (fd < 0) {
@@ -1239,7 +1263,8 @@ static void syscall_handler(struct interrupt_frame *frame) {
                         }
                         cur->fd_table[fd].type = FD_EXT2;
                         cur->fd_table[fd].data = (void *)(uint64_t)ino;
-                        cur->fd_table[fd].offset = 0;
+                        /* O_APPEND: start at end of file */
+                        cur->fd_table[fd].offset = (flags & 0x400) ? chk_inode.i_size : 0;
                         frame->rax = (uint64_t)fd;
                         return;
                     }

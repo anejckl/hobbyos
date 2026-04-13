@@ -21,4 +21,11 @@ tests/debug_serial.log
 serial.log
 serial_debug.log
 serial_test.log
+native_serial.log
 test_features.py
+
+# Claude Code
+.claude/
+
+# Debug logs
+tests/smoke_debug.log

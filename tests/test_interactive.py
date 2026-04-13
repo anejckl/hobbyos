@@ -45,6 +45,8 @@ KEY_MAP = {
     ',': 'comma', ';': 'semicolon', "'": 'apostrophe',
     '[': 'bracket_left', ']': 'bracket_right',
     '\\': 'backslash',
+    '|': 'shift-backslash', '>': 'shift-dot', '<': 'shift-comma',
+    '&': 'shift-7',
 }
 
 
@@ -275,7 +277,7 @@ class QEMUSession:
 
 
 def run_tests(native=False):
-    """Run all 31 interactive tests."""
+    """Run all 38 interactive tests."""
     overall_start = time.time()
     results = []
 
@@ -533,9 +535,72 @@ def run_tests(native=False):
         # Note: external IPs like 8.8.8.8 fail in CI (no outbound ICMP allowed)
         interactive_test("ping_dns", "ping 10.0.2.3", "Reply from", post_delay=5.0)
 
+        # === User shell tests (run sh, test pipes/redirects/chaining, exit) ===
+
+        # --- Test 32: Enter user shell ---
+        interactive_test("sh_enter", "run sh", "$ ", post_delay=2.0)
+
+        # --- Test 33: sh pipe basic (echo | grep) ---
+        interactive_test("sh_pipe_grep", "echo TestPipe | grep TestPipe",
+                         "TestPipe", post_delay=3.0)
+
+        # --- Test 34: sh redirect out ---
+        # Write to file, then cat it
+        t = time.time()
+        qemu.snapshot_serial()
+        time.sleep(0.3)
+        qemu.type_line("echo RedirTest > /redir.txt")
+        time.sleep(3.0)
+        qemu.type_line("cat /redir.txt")
+        time.sleep(3.0)
+        found = qemu.wait_for_pattern_in_new("RedirTest", timeout=TEST_TIMEOUT)
+        full = qemu.read_serial()
+        new_out = full[qemu.serial_pos:]
+        results.append({
+            "name": "sh_redirect_out",
+            "passed": found,
+            "duration_seconds": round(time.time() - t, 1),
+            "output_snippet": new_out[-200:] if new_out else "",
+            "error": None if found else "Redirect output not found",
+        })
+        qemu.serial_pos = len(qemu.read_serial())
+
+        # --- Test 35: sh append redirect ---
+        t = time.time()
+        qemu.snapshot_serial()
+        time.sleep(0.3)
+        qemu.type_line("echo Line1 > /app.txt")
+        time.sleep(3.0)
+        qemu.type_line("echo Line2 >> /app.txt")
+        time.sleep(3.0)
+        qemu.type_line("cat /app.txt")
+        time.sleep(3.0)
+        full = qemu.read_serial()
+        new_out = full[qemu.serial_pos:]
+        passed = "Line1" in new_out and "Line2" in new_out
+        results.append({
+            "name": "sh_redirect_append",
+            "passed": passed,
+            "duration_seconds": round(time.time() - t, 1),
+            "output_snippet": new_out[-200:] if new_out else "",
+            "error": None if passed else "Append redirect: Line1/Line2 not both found",
+        })
+        qemu.serial_pos = len(qemu.read_serial())
+
+        # --- Test 36: sh semicolon chaining ---
+        interactive_test("sh_chain_semi", "echo ChainA ; echo ChainB",
+                         "ChainA", post_delay=3.0)
+
+        # --- Test 37: sh && chaining ---
+        interactive_test("sh_chain_and", "echo AndA && echo AndB",
+                         "AndB", post_delay=3.0)
+
+        # --- Test 38: Exit user shell ---
+        interactive_test("sh_exit", "exit", "exit with status 0", post_delay=3.0)
+
     except RuntimeError as e:
         # Boot failure — fill remaining tests as failed
-        while len(results) < 31:
+        while len(results) < 38:
             results.append({
                 "name": "skipped",
                 "passed": False,

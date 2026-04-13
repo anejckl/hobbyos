@@ -6,6 +6,12 @@
 #include "debug/debug.h"
 #include "scheduler/scheduler.h"
 
+static volatile bool autotest_finished = false;
+
+bool autotest_is_done(void) {
+    return autotest_finished;
+}
+
 static const char *test_programs[] = {
     "fork_test",
     "cow_test",
@@ -18,6 +24,7 @@ static const char *test_programs[] = {
     "waitpid_test",
     "mmap_test",
     "epoll_test",
+    "sh_test",
     NULL
 };
 
@@ -58,6 +65,8 @@ void autotest_run(void) {
     }
 
     debug_printf("AUTOTEST: all tests passed\n");
+
+    autotest_finished = true;
 
     /* Done — become zombie so parent (kernel_main/idle) can reap if needed */
     self->state = PROCESS_ZOMBIE;

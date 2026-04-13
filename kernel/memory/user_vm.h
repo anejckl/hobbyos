@@ -6,7 +6,8 @@
 /* User virtual address layout */
 #define USER_CODE_BASE    0x400000ULL
 #define USER_STACK_TOP    0x800000000ULL
-#define USER_STACK_BOTTOM (USER_STACK_TOP - PAGE_SIZE)
+#define USER_STACK_PAGES  4  /* 16 KB user stack */
+#define USER_STACK_BOTTOM (USER_STACK_TOP - (USER_STACK_PAGES * PAGE_SIZE))
 
 /* Create a new user address space (PML4).
  * Copies kernel PML4 entries so kernel code/interrupts work.

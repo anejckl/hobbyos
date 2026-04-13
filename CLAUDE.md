@@ -103,14 +103,32 @@ Runs 21 tests by sending keystrokes to QEMU via monitor socket and checking seri
 After building the ISO via Docker, launch QEMU natively to get a GUI window for interactive testing:
 
 ```bash
+# Basic (no disk):
 /c/msys64/ucrt64/bin/qemu-system-x86_64.exe \
   -cdrom C:/Users/Uporabnik/Documents/hobbyos/hobbyos.iso \
   -serial stdio -m 128M -no-reboot -no-shutdown
+
+# With ext2 disk (needed for file redirects, ext2 commands):
+/c/msys64/ucrt64/bin/qemu-system-x86_64.exe \
+  -cdrom C:/Users/Uporabnik/Documents/hobbyos/hobbyos.iso \
+  -serial stdio -m 128M -no-reboot -no-shutdown \
+  -drive file=C:/Users/Uporabnik/Documents/hobbyos/test_disk.img,format=raw,if=ide \
+  -net nic,model=e1000 -net user
+
+# With monitor socket (for sendkey injection via tests/qemu_sendkeys.py):
+/c/msys64/ucrt64/bin/qemu-system-x86_64.exe \
+  -cdrom C:/Users/Uporabnik/Documents/hobbyos/hobbyos.iso \
+  -serial stdio -m 128M -no-reboot -no-shutdown \
+  -monitor tcp:127.0.0.1:4444,server,nowait \
+  -drive file=C:/Users/Uporabnik/Documents/hobbyos/test_disk.img,format=raw,if=ide \
+  -net nic,model=e1000 -net user
 ```
 
 - QEMU binary path: `/c/msys64/ucrt64/bin/qemu-system-x86_64.exe`
 - VGA output appears in the QEMU GUI window; serial debug output appears in the terminal
 - Use `run_in_background: true` when launching from Claude Code so the window stays open for the user
+- **CRITICAL: Disk must use `if=ide` without `index=N`.** The kernel ATA driver only checks the primary IDE controller (0x1F0). Using `index=1` puts the disk on the secondary controller, which the driver won't detect. The `-cdrom` flag uses a separate IDE channel and doesn't conflict.
+- Create the test disk via Docker: `MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test bash -c "dd if=/dev/zero of=/hobbyos/test_disk.img bs=1M count=16 2>/dev/null && mkfs.ext2 -F /hobbyos/test_disk.img >/dev/null 2>&1"`
 
 ### Native Tool Availability
 

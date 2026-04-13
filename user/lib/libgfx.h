@@ -52,4 +52,15 @@ void gfx_surface_draw_string(gfx_surface_t *s, int x, int y, const char *str, ui
 void gfx_surface_blit(gfx_surface_t *dst, gfx_surface_t *src, int x, int y);
 void gfx_surface_blit_to_ctx(gfx_ctx_t *ctx, gfx_surface_t *src, int dst_x, int dst_y);
 
+/* 8x16 font functions */
+void gfx_surface_draw_char16(gfx_surface_t *s, int x, int y, char c, uint32_t fg, uint32_t bg);
+void gfx_surface_draw_string16(gfx_surface_t *s, int x, int y, const char *str, uint32_t fg, uint32_t bg);
+
+/* Alpha blending */
+static inline uint32_t gfx_blend(uint32_t dst, uint32_t src, uint8_t alpha);
+void gfx_surface_fill_rect_alpha(gfx_surface_t *s, int x, int y, int w, int h, uint32_t color, uint8_t alpha);
+
+/* Sub-rectangle blit */
+void gfx_surface_blit_rect_to_ctx(gfx_ctx_t *ctx, gfx_surface_t *src, int sx, int sy, int sw, int sh, int dx, int dy);
+
 #endif /* LIBGFX_H */

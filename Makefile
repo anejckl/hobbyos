@@ -105,7 +105,7 @@ C_OBJS = $(C_SRCS:.c=.o)
 C_DEPS = $(C_OBJS:.o=.d)
 
 # User program embedded objects
-USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm net_test nc httpd ping exec_test waitpid_test argv_test fork_exec_test mmap_test epoll_test cp mv df grep head tail top kill ifconfig netstat sh id whoami demand_test perm_test nonblock_test wm
+USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm net_test nc httpd ping exec_test waitpid_test argv_test fork_exec_test mmap_test epoll_test cp mv df grep head tail top kill ifconfig netstat sh cat sh_test id whoami demand_test perm_test nonblock_test wm
 USER_EMBED_OBJS = $(patsubst %,user/%_embed.o,$(USER_PROGRAMS))
 
 OBJS = $(ASM_OBJS) $(C_OBJS) $(USER_EMBED_OBJS)

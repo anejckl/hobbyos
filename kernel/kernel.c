@@ -58,12 +58,9 @@ void kpanic(const char *msg) {
 }
 
 void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
-    /* Phase 1: VGA output */
+    /* Phase 1: VGA output + boot screen */
     vga_init();
-
-    vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
-    vga_printf("HobbyOS booting...\n");
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    boot_screen_init();
 
     /* Phase 8 (early): Debug serial output */
     debug_init();
@@ -73,7 +70,7 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
     if (multiboot_magic != MULTIBOOT2_MAGIC) {
         kpanic("Invalid Multiboot2 magic number!");
     }
-    vga_printf("[OK] Multiboot2 verified (info at 0x%x)\n", (uint64_t)multiboot_info_phys);
+    debug_printf("[OK] Multiboot2 verified (info at 0x%x)\n", (uint64_t)multiboot_info_phys);
     debug_printf("Multiboot2 info at physical 0x%x\n", (uint64_t)multiboot_info_phys);
 
     /* Save MB2 info pointer for later FB parsing (after VMM/heap ready) */
@@ -81,82 +78,90 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
 
     /* Phase 2: GDT + TSS */
     gdt_init();
-    vga_printf("[OK] GDT initialized\n");
+    boot_screen_status("Initializing CPU...", 5);
+    debug_printf("[OK] GDT initialized\n");
     debug_printf("GDT initialized\n");
 
     /* Phase 3: IDT + PIC + Interrupts */
     pic_init();
-    vga_printf("[OK] PIC remapped\n");
+    debug_printf("[OK] PIC remapped\n");
     debug_printf("PIC remapped\n");
 
     idt_init();
-    vga_printf("[OK] IDT initialized\n");
+    debug_printf("[OK] IDT initialized\n");
     debug_printf("IDT initialized\n");
 
     interrupts_init();
-    vga_printf("[OK] Interrupt handlers registered\n");
+    boot_screen_status("Setting up interrupts...", 15);
+    debug_printf("[OK] Interrupt handlers registered\n");
     debug_printf("Interrupt handlers registered\n");
 
     /* Phase 4: Timer + Keyboard */
     pit_init(100);  /* 100 Hz */
-    vga_printf("[OK] PIT timer at 100Hz\n");
+    debug_printf("[OK] PIT timer at 100Hz\n");
     debug_printf("PIT initialized at 100Hz\n");
 
     keyboard_init();
-    vga_printf("[OK] Keyboard driver initialized\n");
+    debug_printf("[OK] Keyboard driver initialized\n");
     debug_printf("Keyboard initialized\n");
 
     tty_init();
-    vga_printf("[OK] TTY subsystem initialized\n");
+    boot_screen_status("Loading drivers...", 25);
+    debug_printf("[OK] TTY subsystem initialized\n");
 
     /* Phase 5: Physical Memory Manager */
     pmm_init(multiboot_info_phys);
-    vga_printf("[OK] PMM: %u free pages (%u MB free)\n",
+    boot_screen_status("Detecting memory...", 35);
+    debug_printf("[OK] PMM: %u free pages (%u MB free)\n",
                (uint64_t)pmm_get_free_pages(),
                (uint64_t)(pmm_get_free_pages() * 4 / 1024));
     debug_printf("PMM: %u free pages\n", (uint64_t)pmm_get_free_pages());
 
     /* Phase 6: Virtual Memory Manager + Kernel Heap */
     vmm_init();
-    vga_printf("[OK] VMM initialized\n");
+    debug_printf("[OK] VMM initialized\n");
     debug_printf("VMM initialized\n");
 
     kheap_init();
-    vga_printf("[OK] Kernel heap initialized\n");
+    boot_screen_status("Setting up virtual memory...", 45);
+    debug_printf("[OK] Kernel heap initialized\n");
     debug_printf("Kernel heap initialized\n");
 
     /* Reverse map + swap + page cache */
     rmap_init();
     swap_init();
     pagecache_init();
-    vga_printf("[OK] VM subsystems (rmap, swap, pagecache) initialized\n");
+    boot_screen_status("Initializing VM subsystems...", 50);
+    debug_printf("[OK] VM subsystems (rmap, swap, pagecache) initialized\n");
 
     /* Phase 7: Process + Scheduler */
     process_init();
-    vga_printf("[OK] Process subsystem initialized\n");
+    debug_printf("[OK] Process subsystem initialized\n");
     debug_printf("Process subsystem initialized\n");
 
     scheduler_init();
-    vga_printf("[OK] Scheduler initialized\n");
+    boot_screen_status("Starting scheduler...", 55);
+    debug_printf("[OK] Scheduler initialized\n");
     debug_printf("Scheduler initialized\n");
 
     /* Syscall interface */
     syscall_init();
-    vga_printf("[OK] Syscall handler registered\n");
+    debug_printf("[OK] Syscall handler registered\n");
     debug_printf("Syscall handler registered\n");
 
     /* Filesystem */
     vfs_init();
-    vga_printf("[OK] VFS initialized\n");
+    debug_printf("[OK] VFS initialized\n");
 
     ramfs_init();
-    vga_printf("[OK] RAMFS mounted\n");
+    debug_printf("[OK] RAMFS mounted\n");
 
     user_programs_populate_ramfs();
-    vga_printf("[OK] User programs loaded into RAMFS\n");
+    boot_screen_status("Mounting filesystems...", 65);
+    debug_printf("[OK] User programs loaded into RAMFS\n");
 
     procfs_init();
-    vga_printf("[OK] Procfs mounted at /proc\n");
+    debug_printf("[OK] Procfs mounted at /proc\n");
 
     /* Device framework */
     device_init();
@@ -166,7 +171,8 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
     dev_tty_init();
     dev_random_init();
     devfs_init();
-    vga_printf("[OK] Device framework initialized (/dev)\n");
+    boot_screen_status("Registering devices...", 70);
+    debug_printf("[OK] Device framework initialized (/dev)\n");
 
     /* Parse Multiboot2 tags for framebuffer */
     {
@@ -192,7 +198,9 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
                 if (fb_type == 1 && fb_bpp == 32) {  /* RGB, 32bpp */
                     fb_init(fb_addr, fb_w, fb_h, fb_pitch, fb_bpp);
                     vga_enable_fb_console();
-                    vga_printf("[OK] Framebuffer: %ux%u bpp=%u\n",
+                    boot_screen_fb_init();
+                    boot_screen_status("Initializing framebuffer...", 75);
+                    debug_printf("[OK] Framebuffer: %ux%u bpp=%u\n",
                                (uint64_t)fb_w, (uint64_t)fb_h, (uint64_t)fb_bpp);
                 }
             }
@@ -204,36 +212,39 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
 
     /* PS/2 mouse */
     mouse_init();
-    vga_printf("[OK] PS/2 mouse initialized\n");
+    boot_screen_status("Detecting peripherals...", 80);
+    debug_printf("[OK] PS/2 mouse initialized\n");
 
     /* Input device nodes (/dev/input/keyboard, /dev/input/mouse0) */
     dev_input_init();
-    vga_printf("[OK] Input device nodes registered\n");
+    debug_printf("[OK] Input device nodes registered\n");
 
     /* Block cache */
     bcache_init();
-    vga_printf("[OK] Block cache initialized\n");
+    debug_printf("[OK] Block cache initialized\n");
 
     /* ATA disk driver */
     ata_init();
     if (ata_disk_present()) {
-        vga_printf("[OK] ATA disk detected\n");
+        boot_screen_status("Scanning disks...", 85);
+        debug_printf("[OK] ATA disk detected\n");
 
         /* Journal recovery before ext2 init */
         journal_init();
         journal_recover();
 
         if (ext2_init() == 0)
-            vga_printf("[OK] ext2 filesystem mounted\n");
+            debug_printf("[OK] ext2 filesystem mounted\n");
         else
-            vga_printf("[--] ext2: no valid filesystem found\n");
+            debug_printf("[--] ext2: no valid filesystem found\n");
     } else {
-        vga_printf("[--] No ATA disk detected\n");
+        boot_screen_status("Scanning disks...", 85);
+        debug_printf("[--] No ATA disk detected\n");
     }
 
     /* PCI bus enumeration */
     pci_init();
-    vga_printf("[OK] PCI bus enumerated\n");
+    debug_printf("[OK] PCI bus enumerated\n");
     debug_printf("PCI bus enumerated\n");
 
     /* Network buffer pool */
@@ -241,14 +252,15 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
 
     /* E1000 NIC driver */
     e1000_init();
+    boot_screen_status("Configuring network...", 95);
     if (e1000_is_initialized()) {
         uint8_t mac[6];
         e1000_get_mac(mac);
-        vga_printf("[OK] e1000 NIC initialized (MAC %x:%x:%x:%x:%x:%x)\n",
+        debug_printf("[OK] e1000 NIC initialized (MAC %x:%x:%x:%x:%x:%x)\n",
                    (uint64_t)mac[0], (uint64_t)mac[1], (uint64_t)mac[2],
                    (uint64_t)mac[3], (uint64_t)mac[4], (uint64_t)mac[5]);
     } else {
-        vga_printf("[--] e1000 NIC not found\n");
+        debug_printf("[--] e1000 NIC not found\n");
     }
 
     /* TCP state */
@@ -269,13 +281,9 @@ void kernel_main(uint32_t multiboot_magic, uint32_t multiboot_info_phys) {
 
     /* Enable interrupts */
     sti();
-    vga_printf("[OK] Interrupts enabled\n\n");
+    boot_screen_status("Ready!", 100);
+    debug_printf("[OK] Interrupts enabled\n");
     debug_printf("Interrupts enabled\n");
-
-    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
-    vga_printf("Welcome to HobbyOS!\n");
-    vga_printf("Type 'help' for a list of commands.\n\n");
-    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
 
     /* Auto-run integration tests */
     {

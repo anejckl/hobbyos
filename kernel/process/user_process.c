@@ -73,14 +73,20 @@ int user_process_create_args(const char *name, const uint8_t *data, uint64_t siz
         return -1;
     }
 
-    /* 5. Allocate user stack page */
-    uint64_t stack_phys = pmm_alloc_page();
-    if (!stack_phys) {
-        debug_printf("user_process: failed to alloc stack page\n");
-        proc->state = PROCESS_TERMINATED;
-        return -1;
+    /* 5. Allocate user stack pages */
+    uint64_t stack_pages[USER_STACK_PAGES];
+    for (int i = 0; i < USER_STACK_PAGES; i++) {
+        stack_pages[i] = pmm_alloc_page();
+        if (!stack_pages[i]) {
+            debug_printf("user_process: failed to alloc stack page %d\n", (int64_t)i);
+            for (int j = 0; j < i; j++) pmm_free_page(stack_pages[j]);
+            proc->state = PROCESS_TERMINATED;
+            return -1;
+        }
+        memset(PHYS_TO_VIRT(stack_pages[i]), 0, PAGE_SIZE);
     }
-    memset(PHYS_TO_VIRT(stack_phys), 0, PAGE_SIZE);
+    /* Top page is the last one (highest virtual address) */
+    uint64_t stack_phys = stack_pages[USER_STACK_PAGES - 1];
 
     /* 6. Parse args string into argc/argv */
     const char *kern_argv[UPCA_MAX_ARGS];
@@ -108,19 +114,22 @@ int user_process_create_args(const char *name, const uint8_t *data, uint64_t siz
 
     /* 7. Set up SysV stack layout (writes strings + pointers via PHYS_TO_VIRT) */
     uint64_t entry_rsp, entry_argv_ptr;
-    if (elf_setup_stack(stack_phys, USER_STACK_BOTTOM, argc, kern_argv,
+    if (elf_setup_stack(stack_phys, USER_STACK_TOP - PAGE_SIZE, argc, kern_argv,
                         &elf_result, &entry_rsp, &entry_argv_ptr) < 0) {
         debug_printf("user_process: elf_setup_stack failed for '%s'\n", name);
         proc->state = PROCESS_TERMINATED;
         return -1;
     }
 
-    /* 8. Map the stack page */
-    if (user_vm_map_page(pml4_phys, USER_STACK_BOTTOM,
-                         stack_phys, PTE_PRESENT | PTE_WRITABLE | PTE_USER) < 0) {
-        debug_printf("user_process: failed to map stack page\n");
-        proc->state = PROCESS_TERMINATED;
-        return -1;
+    /* 8. Map all stack pages */
+    for (int i = 0; i < USER_STACK_PAGES; i++) {
+        uint64_t vaddr = USER_STACK_BOTTOM + (uint64_t)i * PAGE_SIZE;
+        if (user_vm_map_page(pml4_phys, vaddr,
+                             stack_pages[i], PTE_PRESENT | PTE_WRITABLE | PTE_USER) < 0) {
+            debug_printf("user_process: failed to map stack page %d\n", (int64_t)i);
+            proc->state = PROCESS_TERMINATED;
+            return -1;
+        }
     }
 
     /* 8b. Map legacy argv page at USER_ARGV_ADDR for programs using get_argv() */

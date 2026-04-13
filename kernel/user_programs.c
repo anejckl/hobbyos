@@ -73,6 +73,10 @@ extern const uint8_t _binary_netstat_elf_start[];
 extern const uint8_t _binary_netstat_elf_end[];
 extern const uint8_t _binary_sh_elf_start[];
 extern const uint8_t _binary_sh_elf_end[];
+extern const uint8_t _binary_cat_elf_start[];
+extern const uint8_t _binary_cat_elf_end[];
+extern const uint8_t _binary_sh_test_elf_start[];
+extern const uint8_t _binary_sh_test_elf_end[];
 extern const uint8_t _binary_id_elf_start[];
 extern const uint8_t _binary_id_elf_end[];
 extern const uint8_t _binary_whoami_elf_start[];
@@ -263,6 +267,16 @@ static const struct user_program programs[] = {
         .size = 0
     },
     {
+        .name = "cat",
+        .data = _binary_cat_elf_start,
+        .size = 0
+    },
+    {
+        .name = "sh_test",
+        .data = _binary_sh_test_elf_start,
+        .size = 0
+    },
+    {
         .name = "id",
         .data = _binary_id_elf_start,
         .size = 0
@@ -366,6 +380,10 @@ static uint64_t program_size(const uint8_t *data) {
         return (uint64_t)(_binary_netstat_elf_end - _binary_netstat_elf_start);
     if (data == _binary_sh_elf_start)
         return (uint64_t)(_binary_sh_elf_end - _binary_sh_elf_start);
+    if (data == _binary_cat_elf_start)
+        return (uint64_t)(_binary_cat_elf_end - _binary_cat_elf_start);
+    if (data == _binary_sh_test_elf_start)
+        return (uint64_t)(_binary_sh_test_elf_end - _binary_sh_test_elf_start);
     if (data == _binary_id_elf_start)
         return (uint64_t)(_binary_id_elf_end - _binary_id_elf_start);
     if (data == _binary_whoami_elf_start)

@@ -74,4 +74,8 @@ PASS: epoll_ctl DEL
 PASS: epoll_wait after DEL returns 0
 PASS: epoll_wait timeout returns 0
 AUTOTEST: epoll_test exited with status 0
+# sh_test (pipe/redirect plumbing test)
+AUTOTEST: running sh_test
+sh_test: PASS - all tests passed
+AUTOTEST: sh_test exited with status 0
 AUTOTEST: all tests passed

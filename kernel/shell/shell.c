@@ -2,6 +2,7 @@
 #include "../common.h"
 #include "../string.h"
 #include "../drivers/vga.h"
+#include "../autotest.h"
 #include "../drivers/keyboard.h"
 #include "../drivers/pit.h"
 #include "../memory/pmm.h"
@@ -270,7 +271,7 @@ static void cmd_run(int argc, char **argv) {
         tty_set_fg(child_pid2);
 
         int32_t status = 0;
-        int pid = process_wait_for(0, &status);
+        int pid = process_wait_for(child_pid2, &status);
         tty_set_fg(0);
         if (pid > 0) {
             vga_printf("Process %u exited with status %d\n",
@@ -868,6 +869,19 @@ void shell_run(void) {
     sti();
 
     debug_printf("shell: shell_run started\n");
+
+    /* Wait for autotests to finish before showing the console */
+    while (!autotest_is_done()) {
+        schedule();
+        sti();
+    }
+
+    /* Transition from boot screen to console */
+    boot_screen_finish();
+    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    vga_puts("Welcome to HobbyOS!\n");
+    vga_puts("Type 'help' for a list of commands.\n\n");
+    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
 
     for (;;) {
         /* Check for completed background jobs */

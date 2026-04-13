@@ -24,6 +24,7 @@ static uint16_t fb_shadow_buffer[VGA_WIDTH * VGA_HEIGHT];
 #define FB_CHAR_W  8
 #define FB_CHAR_H  9  /* 8px glyph + 1px line spacing */
 static bool fb_console_active = false;
+static bool boot_screen_active = false;  /* suppress VGA text output during boot */
 static uint32_t fb_con_width;   /* pixels */
 static uint32_t fb_con_height;  /* pixels */
 static uint32_t fb_con_pitch;   /* bytes per row */
@@ -311,6 +312,10 @@ void vga_putchar(char c) {
         debug_putchar(c);
     }
 
+    /* During boot screen, only forward to serial — don't draw on screen */
+    if (boot_screen_active)
+        return;
+
     if (c == '\n') {
         vga_col = 0;
         vga_row++;
@@ -489,4 +494,255 @@ void vga_printf(const char *fmt, ...) {
     }
 
     va_end(ap);
+}
+
+/* ======================================================================
+ * Boot screen — text-mode and framebuffer graphical boot display
+ * ====================================================================== */
+
+static bool boot_fb_mode = false;  /* true after framebuffer boot screen init */
+
+/* Text-mode ASCII art header (displayed rows 3-10) */
+static const char *boot_logo[] = {
+    "  _   _       _     _            ___  ____  ",
+    " | | | | ___ | |__ | |__  _   _ / _ \\/ ___| ",
+    " | |_| |/ _ \\| '_ \\| '_ \\| | | | | | \\___ \\ ",
+    " |  _  | (_) | |_) | |_) | |_| | |_| |___) |",
+    " |_| |_|\\___/|_.__/|_.__/ \\__, |\\___/|____/ ",
+    "                          |___/              ",
+};
+#define LOGO_LINES 6
+
+/* Draw text-mode progress bar on row 16 */
+static void boot_text_bar(int percent) {
+    /* Progress bar: [=====>                    ] 35% */
+    int bar_w = 40;
+    int filled = percent * bar_w / 100;
+    if (filled > bar_w) filled = bar_w;
+
+    uint8_t saved_color = vga_color_attr;
+
+    /* Position cursor at row 16, col 19 (centered for 42-char bar) */
+    vga_row = 16;
+    vga_col = 19;
+
+    vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+    vga_putchar('[');
+
+    for (int i = 0; i < bar_w; i++) {
+        if (i < filled) {
+            vga_set_color(VGA_LIGHT_GREEN, VGA_BLACK);
+            vga_putchar('=');
+        } else if (i == filled) {
+            vga_set_color(VGA_WHITE, VGA_BLACK);
+            vga_putchar('>');
+        } else {
+            vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+            vga_putchar(' ');
+        }
+    }
+
+    vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+    vga_putchar(']');
+
+    /* Percent number */
+    vga_set_color(VGA_WHITE, VGA_BLACK);
+    vga_putchar(' ');
+    if (percent >= 100) {
+        vga_putchar('1'); vga_putchar('0'); vga_putchar('0');
+    } else if (percent >= 10) {
+        vga_putchar((char)('0' + percent / 10));
+        vga_putchar((char)('0' + percent % 10));
+    } else {
+        vga_putchar((char)('0' + percent));
+    }
+    vga_putchar('%');
+
+    vga_color_attr = saved_color;
+}
+
+/* Clear a specific text-mode row */
+static void boot_clear_row(int row) {
+    for (int c = 0; c < VGA_WIDTH; c++)
+        vga_buffer[row * VGA_WIDTH + c] = vga_entry(' ', vga_color(VGA_LIGHT_GREY, VGA_BLACK));
+}
+
+void boot_screen_init(void) {
+    boot_screen_active = true;
+    vga_clear();
+
+    /* Draw logo centered (80 cols, logo is ~46 chars) */
+    uint8_t saved = vga_color_attr;
+    vga_set_color(VGA_LIGHT_CYAN, VGA_BLACK);
+    for (int i = 0; i < LOGO_LINES; i++) {
+        vga_row = (uint16_t)(4 + i);
+        vga_col = 17;
+        vga_puts(boot_logo[i]);
+    }
+
+    /* Version line */
+    vga_set_color(VGA_DARK_GREY, VGA_BLACK);
+    vga_row = 11;
+    vga_col = 28;
+    vga_puts("v0.1  -  Hobby Kernel");
+
+    /* Draw empty progress bar */
+    boot_text_bar(0);
+
+    /* Status line placeholder at row 18 */
+    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+    vga_row = 18;
+    vga_col = 25;
+    vga_puts("Initializing...");
+
+    vga_color_attr = saved;
+}
+
+void boot_screen_status(const char *msg, int percent) {
+    if (boot_fb_mode) {
+        /* Framebuffer mode: draw graphical progress bar + status */
+        uint32_t *fb = (uint32_t *)FB_KERNEL_VA;
+        uint32_t stride = fb_con_pitch / 4;
+
+        /* Progress bar dimensions */
+        uint32_t bar_x = fb_con_width / 2 - 200;
+        uint32_t bar_y = fb_con_height / 2 + 40;
+        uint32_t bar_w = 400;
+        uint32_t bar_h = 20;
+
+        /* Draw bar outline (dark grey) */
+        uint32_t outline_col = 0x404040;
+        for (uint32_t x = bar_x - 1; x <= bar_x + bar_w; x++) {
+            fb[(bar_y - 1) * stride + x] = outline_col;
+            fb[(bar_y + bar_h) * stride + x] = outline_col;
+        }
+        for (uint32_t y = bar_y; y < bar_y + bar_h; y++) {
+            fb[y * stride + bar_x - 1] = outline_col;
+            fb[y * stride + bar_x + bar_w] = outline_col;
+        }
+
+        /* Fill bar interior */
+        uint32_t filled_w = (uint32_t)percent * bar_w / 100;
+        if (filled_w > bar_w) filled_w = bar_w;
+        for (uint32_t y = bar_y; y < bar_y + bar_h; y++) {
+            for (uint32_t x = 0; x < bar_w; x++) {
+                uint32_t col;
+                if (x < filled_w) {
+                    /* Gradient green */
+                    col = 0x00AA44;
+                } else {
+                    col = 0x1A1A2E;  /* dark bg */
+                }
+                fb[y * stride + bar_x + x] = col;
+            }
+        }
+
+        /* Draw status text below bar */
+        uint32_t text_y = bar_y + bar_h + 12;
+        /* Clear previous text (80 chars wide) */
+        for (uint32_t y = text_y; y < text_y + 9 && y < fb_con_height; y++)
+            for (uint32_t x = bar_x; x < bar_x + bar_w; x++)
+                fb[y * stride + x] = 0x0F0F23;
+
+        /* Center the message text */
+        int msg_len = 0;
+        while (msg[msg_len]) msg_len++;
+        uint32_t text_x = bar_x + (bar_w - (uint32_t)msg_len * 8) / 2;
+        for (int i = 0; msg[i]; i++) {
+            fb_draw_char(text_x + (uint32_t)i * 8, text_y, msg[i],
+                         0x888899, 0x0F0F23);
+        }
+        return;
+    }
+
+    /* Text mode: update status line and progress bar */
+    boot_clear_row(18);
+
+    uint8_t saved = vga_color_attr;
+    vga_set_color(VGA_LIGHT_GREY, VGA_BLACK);
+
+    /* Center the message on row 18 */
+    int len = 0;
+    while (msg[len]) len++;
+    int start_col = (80 - len) / 2;
+    if (start_col < 0) start_col = 0;
+    vga_row = 18;
+    vga_col = (uint16_t)start_col;
+    vga_puts(msg);
+
+    /* Update progress bar */
+    boot_text_bar(percent);
+
+    vga_color_attr = saved;
+}
+
+void boot_screen_fb_init(void) {
+    boot_fb_mode = true;
+
+    /* Clear entire framebuffer to dark blue-black */
+    uint32_t *fb = (uint32_t *)FB_KERNEL_VA;
+    uint32_t stride = fb_con_pitch / 4;
+    uint32_t bg = 0x0F0F23;
+    for (uint32_t y = 0; y < fb_con_height; y++)
+        for (uint32_t x = 0; x < fb_con_width; x++)
+            fb[y * stride + x] = bg;
+
+    /* Draw title "HobbyOS" large — using 3x scale of 8x8 font */
+    const char *title = "HobbyOS";
+    int title_len = 7;
+    uint32_t scale = 3;
+    uint32_t char_w = 8 * scale;
+    uint32_t total_w = (uint32_t)title_len * char_w;
+    uint32_t tx = (fb_con_width - total_w) / 2;
+    uint32_t ty = fb_con_height / 2 - 60;
+
+    for (int i = 0; i < title_len; i++) {
+        int idx = (int)(unsigned char)title[i] - 0x20;
+        if (idx < 0 || idx >= 95) idx = 0;
+        const uint8_t *glyph = fb_font8x8[idx];
+        uint32_t cx = tx + (uint32_t)i * char_w;
+        for (uint32_t row = 0; row < 8; row++) {
+            uint8_t bits = glyph[row];
+            for (uint32_t col = 0; col < 8; col++) {
+                uint32_t color = (bits & (1 << col)) ? 0x55BBEE : bg;
+                /* Draw scaled pixel */
+                for (uint32_t sy = 0; sy < scale; sy++)
+                    for (uint32_t sx = 0; sx < scale; sx++) {
+                        uint32_t px = cx + col * scale + sx;
+                        uint32_t py = ty + row * scale + sy;
+                        if (px < fb_con_width && py < fb_con_height)
+                            fb[py * stride + px] = color;
+                    }
+            }
+        }
+    }
+
+    /* Draw "v0.1" subtitle below title */
+    const char *sub = "v0.1 - Hobby Kernel";
+    int sub_len = 0;
+    while (sub[sub_len]) sub_len++;
+    uint32_t sub_x = (fb_con_width - (uint32_t)sub_len * 8) / 2;
+    uint32_t sub_y = ty + 8 * scale + 8;
+    for (int i = 0; sub[i]; i++)
+        fb_draw_char(sub_x + (uint32_t)i * 8, sub_y, sub[i], 0x556677, bg);
+}
+
+void boot_screen_finish(void) {
+    if (boot_fb_mode) {
+        /* Clear framebuffer for normal text console */
+        uint32_t *fb = (uint32_t *)FB_KERNEL_VA;
+        uint32_t stride = fb_con_pitch / 4;
+        for (uint32_t y = 0; y < fb_con_height; y++)
+            for (uint32_t x = 0; x < fb_con_width; x++)
+                fb[y * stride + x] = 0x000000;
+    }
+
+    boot_fb_mode = false;
+    boot_screen_active = false;
+
+    /* Reset VGA text state for normal console */
+    vga_row = 0;
+    vga_col = 0;
+    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++)
+        vga_buffer[i] = vga_entry(' ', vga_color(VGA_LIGHT_GREY, VGA_BLACK));
 }

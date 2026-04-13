@@ -17,9 +17,9 @@ static int my_strstr(const char *hay, const char *ndl) {
 }
 
 int _start(int argc, char **argv) {
-    if (argc < 3) { my_write(1, "Usage: grep <pattern> <file>\n"); sys_exit(1); }
+    if (argc < 2) { my_write(1, "Usage: grep <pattern> [file]\n"); sys_exit(1); }
     const char *pattern = argv[1];
-    int64_t fd = sys_open(argv[2], 0);
+    int64_t fd = (argc >= 3) ? sys_open(argv[2], 0) : 0;
     if (fd < 0) { my_write(1, "grep: cannot open file\n"); sys_exit(1); }
     char line[1024];
     int llen = 0;
@@ -43,7 +43,7 @@ int _start(int argc, char **argv) {
             sys_write(1, "\n", 1);
         }
     }
-    sys_close((int)fd);
+    if (argc >= 3) sys_close((int)fd);
     sys_exit(0);
     return 0;
 }

@@ -45,4 +45,10 @@ void vga_enable_fb_console(void);
 void vga_disable_fb_console(void);
 void vga_repaint_fb_console(void);
 
+/* Boot screen */
+void boot_screen_init(void);
+void boot_screen_status(const char *msg, int percent);
+void boot_screen_fb_init(void);
+void boot_screen_finish(void);
+
 #endif /* VGA_H */

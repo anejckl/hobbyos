@@ -128,7 +128,12 @@ static int current_theme = 0;
 #define COL_LIGHT_GRAY     GFX_RGB(0xCC, 0xCC, 0xCC)
 #define COL_CLOSE_BG       GFX_RGB(0xCC, 0x33, 0x33)
 #define COL_MINIMIZE_BG    GFX_RGB(0x88, 0x88, 0x33)
+#define COL_MAXIMIZE_BG    GFX_RGB(0x33, 0x88, 0x33)
 #define COL_MENU_BG        GFX_RGB(0x22, 0x22, 0x3E)
+#define COL_SHADOW         GFX_RGB(0x00, 0x00, 0x00)
+#define COL_SCROLLBAR_TRACK GFX_RGB(0x22, 0x22, 0x33)
+#define COL_SCROLLBAR_THUMB GFX_RGB(0x55, 0x55, 0x77)
+#define COL_SCROLLBAR_BTN  GFX_RGB(0x44, 0x44, 0x66)
 #define COL_MENU_HOVER     GFX_RGB(0x3A, 0x5A, 0x9E)
 #define COL_CURSOR_BLACK   GFX_RGB(0x00, 0x00, 0x00)
 #define COL_CURSOR_WHITE   GFX_RGB(0xFF, 0xFF, 0xFF)
@@ -144,7 +149,12 @@ static int current_theme = 0;
 #define TASKBAR_H      28
 #define CLOSE_BTN_W    16
 #define MIN_BTN_W      16
+#define MAX_BTN_W      16
 #define RESIZE_BORDER  4
+#define SNAP_THRESHOLD 16
+#define SCROLLBAR_W    12
+#define SHADOW_OFFSET  6
+#define SHADOW_ALPHA   80
 
 /* ---- Window types ---- */
 #define WINTYPE_NORMAL   0
@@ -191,12 +201,15 @@ struct wm_window {
     gfx_surface_t *surface;
     uint8_t visible;
     uint8_t minimized;
+    uint8_t maximized;  /* 0=normal, 1=maximized, 2=snap-left, 3=snap-right */
     uint8_t type;
     uint8_t workspace;
     struct wm_terminal *term;
     struct file_browser *fbrowser;
     int refresh_counter;
     char file_path[96];
+    int saved_x, saved_y, saved_w, saved_h;  /* pre-maximize/snap geometry */
+    int scroll_y, scroll_total, scroll_visible; /* scrollbar state */
 };
 
 /* ---- Hit test ---- */
@@ -204,6 +217,7 @@ struct wm_window {
 #define HIT_TITLEBAR   1
 #define HIT_CLOSE      2
 #define HIT_MINIMIZE   3
+#define HIT_MAXIMIZE   13
 #define HIT_CONTENT    4
 #define HIT_RESIZE_N   5
 #define HIT_RESIZE_S   6
@@ -271,6 +285,45 @@ static int menu_hover;  /* -1 = none */
 #define WS_BTN_PAD 2
 #define WS_AREA_W (WS_COUNT * (WS_BTN_W + WS_BTN_PAD) + WS_BTN_PAD)
 
+/* ---- Cursor types ---- */
+#define CURSOR_ARROW      0
+#define CURSOR_RESIZE_NS  1
+#define CURSOR_RESIZE_EW  2
+#define CURSOR_RESIZE_NWSE 3
+#define CURSOR_RESIZE_NESW 4
+#define CURSOR_IBEAM      5
+#define CURSOR_HAND       6
+#define CURSOR_COUNT      7
+
+static int current_cursor = CURSOR_ARROW;
+
+/* ---- Clipboard & selection ---- */
+static char clipboard[1024];
+static int clipboard_len = 0;
+static int sel_active = 0;
+static int sel_win = -1;
+static int sel_start_row, sel_start_col;
+static int sel_end_row, sel_end_col;
+
+/* ---- Dirty rectangle tracking ---- */
+#define MAX_DIRTY_RECTS 32
+struct dirty_rect { int x, y, w, h; };
+static struct dirty_rect dirty_rects[MAX_DIRTY_RECTS];
+static int dirty_count = 0;
+static int full_redraw = 1;
+
+static void mark_dirty(int x, int y, int w, int h) {
+    if (dirty_count >= MAX_DIRTY_RECTS) { full_redraw = 1; return; }
+    dirty_rects[dirty_count].x = x;
+    dirty_rects[dirty_count].y = y;
+    dirty_rects[dirty_count].w = w;
+    dirty_rects[dirty_count].h = h;
+    dirty_count++;
+}
+
+/* ---- Wallpaper ---- */
+static gfx_surface_t *wallpaper_surf = (gfx_surface_t *)0;
+
 /* ---- Mouse cursor bitmap (12x19) ---- */
 /* 0=transparent, 1=black, 2=white */
 static const uint8_t cursor_bmp[19][12] = {
@@ -292,6 +345,144 @@ static const uint8_t cursor_bmp[19][12] = {
     {1,1,0,0,0,0,1,2,1,0,0,0},
     {1,0,0,0,0,0,1,2,1,0,0,0},
     {0,0,0,0,0,0,0,1,1,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+};
+
+/* Resize N/S cursor (vertical double arrow) */
+static const uint8_t cursor_resize_ns[19][12] = {
+    {0,0,0,0,0,1,0,0,0,0,0,0},
+    {0,0,0,0,1,2,1,0,0,0,0,0},
+    {0,0,0,1,2,2,2,1,0,0,0,0},
+    {0,0,1,2,2,2,2,2,1,0,0,0},
+    {0,0,0,0,1,2,1,0,0,0,0,0},
+    {0,0,0,0,1,2,1,0,0,0,0,0},
+    {0,0,0,0,1,2,1,0,0,0,0,0},
+    {0,0,0,0,1,2,1,0,0,0,0,0},
+    {0,0,0,0,1,2,1,0,0,0,0,0},
+    {0,0,0,0,1,2,1,0,0,0,0,0},
+    {0,0,0,0,1,2,1,0,0,0,0,0},
+    {0,0,0,0,1,2,1,0,0,0,0,0},
+    {0,0,0,0,1,2,1,0,0,0,0,0},
+    {0,0,0,0,1,2,1,0,0,0,0,0},
+    {0,0,0,0,1,2,1,0,0,0,0,0},
+    {0,0,1,2,2,2,2,2,1,0,0,0},
+    {0,0,0,1,2,2,2,1,0,0,0,0},
+    {0,0,0,0,1,2,1,0,0,0,0,0},
+    {0,0,0,0,0,1,0,0,0,0,0,0},
+};
+
+/* Resize E/W cursor (horizontal double arrow) */
+static const uint8_t cursor_resize_ew[19][12] = {
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,1,0,0,0,0,0,1,0,0,0},
+    {0,1,1,0,0,0,0,0,1,1,0,0},
+    {1,2,1,1,1,1,1,1,1,2,1,0},
+    {2,2,2,2,2,2,2,2,2,2,2,0},
+    {1,2,1,1,1,1,1,1,1,2,1,0},
+    {0,1,1,0,0,0,0,0,1,1,0,0},
+    {0,0,1,0,0,0,0,0,1,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+};
+
+/* Resize NW-SE cursor (diagonal double arrow) */
+static const uint8_t cursor_resize_nwse[19][12] = {
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,1,1,1,1,1,1,0,0,0,0,0},
+    {0,1,2,2,2,1,0,0,0,0,0,0},
+    {0,1,2,2,1,0,0,0,0,0,0,0},
+    {0,1,2,1,2,1,0,0,0,0,0,0},
+    {0,1,1,0,1,2,1,0,0,0,0,0},
+    {0,0,0,0,0,1,2,1,0,0,0,0},
+    {0,0,0,0,0,0,1,2,1,0,0,0},
+    {0,0,0,0,0,1,2,1,2,1,0,0},
+    {0,0,0,0,0,0,1,2,2,1,0,0},
+    {0,0,0,0,0,1,2,2,2,1,0,0},
+    {0,0,0,0,1,1,1,1,1,1,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+};
+
+/* Resize NE-SW cursor (diagonal double arrow) */
+static const uint8_t cursor_resize_nesw[19][12] = {
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,1,1,1,1,1,1,0,0},
+    {0,0,0,0,0,1,2,2,2,1,0,0},
+    {0,0,0,0,0,0,1,2,2,1,0,0},
+    {0,0,0,0,0,1,2,1,2,1,0,0},
+    {0,0,0,0,1,2,1,0,1,1,0,0},
+    {0,0,0,1,2,1,0,0,0,0,0,0},
+    {0,0,1,2,1,0,0,0,0,0,0,0},
+    {0,1,2,1,2,1,0,0,0,0,0,0},
+    {0,1,2,2,1,0,0,0,0,0,0,0},
+    {0,1,2,2,2,1,0,0,0,0,0,0},
+    {0,1,1,1,1,1,1,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+};
+
+/* I-beam cursor for text */
+static const uint8_t cursor_ibeam[19][12] = {
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,1,1,1,2,1,1,1,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,0,0,0,2,0,0,0,0,0,0},
+    {0,0,1,1,1,2,1,1,1,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+};
+
+/* Hand cursor for clickable items */
+static const uint8_t cursor_hand[19][12] = {
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,1,1,0,0,0,0,0,0},
+    {0,0,0,1,2,2,1,0,0,0,0,0},
+    {0,0,0,1,2,2,1,0,0,0,0,0},
+    {0,0,0,1,2,2,1,0,0,0,0,0},
+    {0,0,0,1,2,2,1,1,1,0,0,0},
+    {0,0,0,1,2,2,1,2,2,1,0,0},
+    {0,1,1,1,2,2,1,2,2,1,0,0},
+    {1,2,2,1,2,2,2,2,2,1,0,0},
+    {1,2,2,2,2,2,2,2,2,1,0,0},
+    {0,1,2,2,2,2,2,2,2,1,0,0},
+    {0,0,1,2,2,2,2,2,1,0,0,0},
+    {0,0,0,1,2,2,2,2,1,0,0,0},
+    {0,0,0,1,2,2,2,2,1,0,0,0},
+    {0,0,0,0,1,2,2,1,0,0,0,0},
+    {0,0,0,0,1,1,1,1,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
+    {0,0,0,0,0,0,0,0,0,0,0,0},
     {0,0,0,0,0,0,0,0,0,0,0,0},
 };
 
@@ -334,11 +525,16 @@ static int wm_create_window(int x, int y, int cw, int ch, const char *title) {
     win->surface = gfx_surface_create((uint32_t)cw, (uint32_t)ch);
     win->visible = 1;
     win->minimized = 0;
+    win->maximized = 0;
     win->type = WINTYPE_NORMAL;
     win->workspace = (uint8_t)current_workspace;
     win->term = (struct wm_terminal *)0;
     win->fbrowser = (struct file_browser *)0;
     win->refresh_counter = 0;
+    win->saved_x = x; win->saved_y = y;
+    win->saved_w = cw + 2 * BORDER_W;
+    win->saved_h = ch + TITLEBAR_H + 2 * BORDER_W;
+    win->scroll_y = 0; win->scroll_total = 0; win->scroll_visible = 0;
 
     if (win->surface)
         gfx_surface_clear(win->surface, COL_WINDOW_BG);
@@ -416,8 +612,9 @@ static void term_put_num(struct wm_terminal *t, uint64_t val) {
     term_puts(t, buf);
 }
 
-/* Forward declaration for exit handling */
+/* Forward declarations */
 static void wm_close_window(int idx);
+static void resize_apply(int win_idx, int new_w, int new_h);
 
 static void term_exec_cmd(struct wm_terminal *t, int win_idx) {
     t->cmd_buf[t->cmd_len] = '\0';
@@ -483,17 +680,42 @@ static void term_exec_cmd(struct wm_terminal *t, int win_idx) {
     term_prompt(t);
 }
 
+static int is_cell_selected(int win_idx, int row, int col) {
+    if (!sel_active || sel_win != win_idx) return 0;
+    int sr = sel_start_row, sc = sel_start_col;
+    int er = sel_end_row, ec = sel_end_col;
+    /* Normalize so start <= end */
+    if (sr > er || (sr == er && sc > ec)) {
+        int tmp;
+        tmp = sr; sr = er; er = tmp;
+        tmp = sc; sc = ec; ec = tmp;
+    }
+    if (row < sr || row > er) return 0;
+    if (row == sr && row == er) return (col >= sc && col <= ec);
+    if (row == sr) return col >= sc;
+    if (row == er) return col <= ec;
+    return 1;
+}
+
 static void term_render(struct wm_window *win) {
     struct wm_terminal *t = win->term;
     if (!t || !win->surface) return;
+
+    int win_idx = -1;
+    for (int i = 0; i < window_count; i++) {
+        if (&windows[i] == win) { win_idx = i; break; }
+    }
 
     gfx_surface_clear(win->surface, t->bg);
     for (int row = 0; row < TERM_ROWS; row++) {
         for (int col = 0; col < TERM_COLS; col++) {
             char c = t->grid[row][col];
-            if (c != ' ') {
+            int selected = is_cell_selected(win_idx, row, col);
+            uint32_t fg_c = selected ? t->bg : t->fg;
+            uint32_t bg_c = selected ? t->fg : t->bg;
+            if (c != ' ' || selected) {
                 gfx_surface_draw_char(win->surface, col * 8, row * 9,
-                                       c, t->fg, t->bg);
+                                       c, fg_c, bg_c);
             }
         }
     }
@@ -524,6 +746,49 @@ static int wm_create_terminal(int x, int y, const char *title) {
     return idx;
 }
 
+/* ---- Maximize / snap ---- */
+
+static void wm_toggle_maximize(int idx) {
+    if (idx < 0 || idx >= window_count) return;
+    struct wm_window *w = &windows[idx];
+    if (w->type == WINTYPE_TERMINAL) return; /* terminal has fixed size */
+
+    if (w->maximized) {
+        /* Restore */
+        w->x = w->saved_x; w->y = w->saved_y;
+        resize_apply(idx, w->saved_w, w->saved_h);
+        w->maximized = 0;
+    } else {
+        /* Save and maximize */
+        w->saved_x = w->x; w->saved_y = w->y;
+        w->saved_w = w->w; w->saved_h = w->h;
+        w->x = 0; w->y = 0;
+        resize_apply(idx, screen_w, screen_h - TASKBAR_H);
+        w->maximized = 1;
+    }
+}
+
+static void wm_snap_window(int idx, int snap_type) {
+    if (idx < 0 || idx >= window_count) return;
+    struct wm_window *w = &windows[idx];
+    if (w->type == WINTYPE_TERMINAL) return;
+
+    if (!w->maximized) {
+        w->saved_x = w->x; w->saved_y = w->y;
+        w->saved_w = w->w; w->saved_h = w->h;
+    }
+
+    if (snap_type == 2) { /* snap left */
+        w->x = 0; w->y = 0;
+        resize_apply(idx, screen_w / 2, screen_h - TASKBAR_H);
+        w->maximized = 2;
+    } else if (snap_type == 3) { /* snap right */
+        w->x = screen_w / 2; w->y = 0;
+        resize_apply(idx, screen_w / 2, screen_h - TASKBAR_H);
+        w->maximized = 3;
+    }
+}
+
 /* ---- Close window ---- */
 
 static void wm_close_window(int idx) {
@@ -543,8 +808,8 @@ static void sysinfo_render(struct wm_window *win) {
     uint32_t bg = COL_WINDOW_BG;
     gfx_surface_clear(s, bg);
 
-    gfx_surface_draw_string(s, 12, 8, "HobbyOS v2.0", fg, bg);
-    gfx_surface_draw_string(s, 12, 24, "x86-64 Higher-Half Kernel", COL_LIGHT_GRAY, bg);
+    gfx_surface_draw_string16(s, 12, 8, "HobbyOS v2.0", fg, bg);
+    gfx_surface_draw_string16(s, 12, 28, "x86-64 Higher-Half Kernel", COL_LIGHT_GRAY, bg);
 
     /* Uptime */
     uint64_t ms = sys_gettime();
@@ -558,7 +823,7 @@ static void sysinfo_render(struct wm_window *win) {
     int p = 8;
     for (int i = 0; tmp[i]; i++) buf[p++] = tmp[i];
     buf[p++] = 's'; buf[p] = '\0';
-    gfx_surface_draw_string(s, 12, 48, buf, COL_LIGHT_GRAY, bg);
+    gfx_surface_draw_string16(s, 12, 52, buf, COL_LIGHT_GRAY, bg);
 
     /* Process count: scan /proc */
     int proc_count = 0;
@@ -587,9 +852,9 @@ static void sysinfo_render(struct wm_window *win) {
     p = 11;
     for (int i = 0; tmp[i]; i++) buf[p++] = tmp[i];
     buf[p] = '\0';
-    gfx_surface_draw_string(s, 12, 68, buf, COL_LIGHT_GRAY, bg);
+    gfx_surface_draw_string16(s, 12, 74, buf, COL_LIGHT_GRAY, bg);
 
-    gfx_surface_draw_string(s, 12, 88, "Memory: 8MB user heap", COL_LIGHT_GRAY, bg);
+    gfx_surface_draw_string16(s, 12, 96, "Memory: 8MB user heap", COL_LIGHT_GRAY, bg);
 
     /* Heap usage */
     uint64_t used_kb = gfx_heap_ptr / 1024;
@@ -600,10 +865,10 @@ static void sysinfo_render(struct wm_window *win) {
     p = 11;
     for (int i = 0; tmp[i]; i++) buf[p++] = tmp[i];
     buf[p++] = 'K'; buf[p++] = 'B'; buf[p] = '\0';
-    gfx_surface_draw_string(s, 12, 108, buf, COL_LIGHT_GRAY, bg);
+    gfx_surface_draw_string16(s, 12, 118, buf, COL_LIGHT_GRAY, bg);
 
-    gfx_surface_draw_string(s, 12, 136, "Theme: ", COL_LIGHT_GRAY, bg);
-    gfx_surface_draw_string(s, 12 + 7 * 8, 136, themes[current_theme].name, fg, bg);
+    gfx_surface_draw_string16(s, 12, 148, "Theme: ", COL_LIGHT_GRAY, bg);
+    gfx_surface_draw_string16(s, 12 + 7 * 8, 148, themes[current_theme].name, fg, bg);
 }
 
 static void wm_create_sysinfo(void) {
@@ -625,10 +890,10 @@ static void taskmgr_refresh(struct wm_window *win) {
     gfx_surface_clear(s, bg);
 
     /* Header */
-    gfx_surface_draw_string(s, 8, 4, "PID  NAME             STATE", fg, bg);
-    gfx_surface_fill_rect(s, 4, 14, win->content_w - 8, 1, COL_LIGHT_GRAY);
+    gfx_surface_draw_string16(s, 8, 4, "PID  NAME             STATE", fg, bg);
+    gfx_surface_fill_rect(s, 4, 22, win->content_w - 8, 1, COL_LIGHT_GRAY);
 
-    int row_y = 18;
+    int row_y = 26;
     char path[32];
     char buf[256];
 
@@ -720,8 +985,8 @@ static void taskmgr_refresh(struct wm_window *win) {
         while (end > 0 && line[end - 1] == ' ') end--;
         line[end] = '\0';
 
-        gfx_surface_draw_string(s, 8, row_y, line, COL_LIGHT_GRAY, bg);
-        row_y += 12;
+        gfx_surface_draw_string16(s, 8, row_y, line, COL_LIGHT_GRAY, bg);
+        row_y += 18;
     }
 }
 
@@ -796,10 +1061,12 @@ static void fb_render(struct wm_window *win) {
     gfx_surface_clear(s, bg);
 
     /* Path bar */
-    gfx_surface_draw_string(s, 8, 4, fbr->current_path, fg, bg);
-    gfx_surface_fill_rect(s, 4, 14, win->content_w - 8, 1, COL_LIGHT_GRAY);
+    gfx_surface_draw_string16(s, 8, 4, fbr->current_path, fg, bg);
+    gfx_surface_fill_rect(s, 4, 22, win->content_w - 8, 1, COL_LIGHT_GRAY);
 
-    int row_y = 18;
+    int content_right = win->content_w - SCROLLBAR_W;
+    int row_y = 26;
+    int visible_count = 0;
     for (int i = fbr->scroll_offset; i < fbr->entry_count && row_y < win->content_h - 10; i++) {
         struct fb_entry *e = &fbr->entries[i];
         char line[48];
@@ -814,12 +1081,36 @@ static void fb_render(struct wm_window *win) {
             line[p++] = e->name[j];
         line[p] = '\0';
 
-        gfx_surface_draw_string(s, 8, row_y, line, COL_LIGHT_GRAY, bg);
-        row_y += 12;
+        gfx_surface_draw_string16(s, 8, row_y, line, COL_LIGHT_GRAY, bg);
+        row_y += 18;
+        visible_count++;
     }
 
     if (fbr->entry_count == 0) {
-        gfx_surface_draw_string(s, 8, 18, "(empty directory)", COL_LIGHT_GRAY, bg);
+        gfx_surface_draw_string16(s, 8, 26, "(empty directory)", COL_LIGHT_GRAY, bg);
+    }
+
+    /* Update scroll state */
+    win->scroll_total = fbr->entry_count;
+    win->scroll_visible = visible_count;
+    win->scroll_y = fbr->scroll_offset;
+
+    /* Draw scrollbar */
+    if (fbr->entry_count > visible_count) {
+        int sb_x = content_right;
+        int sb_y = 26;
+        int sb_h = win->content_h - sb_y - 4;
+        gfx_surface_fill_rect(s, sb_x, sb_y, SCROLLBAR_W, sb_h, COL_SCROLLBAR_TRACK);
+        /* Thumb */
+        int total = fbr->entry_count;
+        int vis = visible_count;
+        int thumb_h = sb_h * vis / total;
+        if (thumb_h < 20) thumb_h = 20;
+        int max_scroll = total - vis;
+        int thumb_y = sb_y;
+        if (max_scroll > 0)
+            thumb_y = sb_y + (sb_h - thumb_h) * fbr->scroll_offset / max_scroll;
+        gfx_surface_fill_rect(s, sb_x + 1, thumb_y, SCROLLBAR_W - 2, thumb_h, COL_SCROLLBAR_THUMB);
     }
 }
 
@@ -863,20 +1154,56 @@ static void fileviewer_render(struct wm_window *win) {
     }
     buf[n] = '\0';
 
-    /* Render text content line by line */
-    int tx = 8, ty = 4;
-    int cw = win->content_w;
+    /* Count total lines */
+    int total_lines = 1;
+    for (int i = 0; i < n; i++)
+        if (buf[i] == '\n') total_lines++;
+
+    int content_right = win->content_w - SCROLLBAR_W;
     int ch = win->content_h;
-    for (int i = 0; i < n && ty < ch - 10; i++) {
+    int visible_lines = (ch - 8) / 18;
+    if (visible_lines < 1) visible_lines = 1;
+
+    /* Skip to scroll_y line */
+    int cur_line = 0;
+    int start_i = 0;
+    for (start_i = 0; start_i < n && cur_line < win->scroll_y; start_i++) {
+        if (buf[start_i] == '\n') cur_line++;
+    }
+
+    /* Render text content line by line with 8x16 font */
+    int tx = 8, ty = 4;
+    int lines_drawn = 0;
+    for (int i = start_i; i < n && ty < ch - 10; i++) {
         if (buf[i] == '\n') {
             tx = 8;
-            ty += 10;
+            ty += 18;
+            lines_drawn++;
         } else if (buf[i] >= ' ' && buf[i] <= '~') {
-            if (tx + 8 < cw) {
-                gfx_surface_draw_char(s, tx, ty, buf[i], COL_LIGHT_GRAY, bg);
+            if (tx + 8 < content_right) {
+                gfx_surface_draw_char16(s, tx, ty, buf[i], COL_LIGHT_GRAY, bg);
                 tx += 8;
             }
         }
+    }
+
+    /* Update scroll state */
+    win->scroll_total = total_lines;
+    win->scroll_visible = visible_lines;
+
+    /* Draw scrollbar */
+    if (total_lines > visible_lines) {
+        int sb_x = content_right;
+        int sb_y = 4;
+        int sb_h = ch - 8;
+        gfx_surface_fill_rect(s, sb_x, sb_y, SCROLLBAR_W, sb_h, COL_SCROLLBAR_TRACK);
+        int thumb_h = sb_h * visible_lines / total_lines;
+        if (thumb_h < 20) thumb_h = 20;
+        int max_scroll = total_lines - visible_lines;
+        int thumb_y = sb_y;
+        if (max_scroll > 0)
+            thumb_y = sb_y + (sb_h - thumb_h) * win->scroll_y / max_scroll;
+        gfx_surface_fill_rect(s, sb_x + 1, thumb_y, SCROLLBAR_W - 2, thumb_h, COL_SCROLLBAR_THUMB);
     }
 }
 
@@ -895,13 +1222,13 @@ static void about_render(struct wm_window *win) {
     gfx_surface_t *s = win->surface;
     if (!s) return;
     gfx_surface_clear(s, COL_WINDOW_BG);
-    gfx_surface_draw_string(s, 16, 16, "HobbyOS Window Manager v2.0",
+    gfx_surface_draw_string16(s, 16, 16, "HobbyOS Window Manager v2.0",
         COL_WHITE, COL_WINDOW_BG);
-    gfx_surface_draw_string(s, 16, 32, "A hobby operating system",
+    gfx_surface_draw_string16(s, 16, 38, "A hobby operating system",
         COL_LIGHT_GRAY, COL_WINDOW_BG);
-    gfx_surface_draw_string(s, 16, 48, "with interactive GUI",
+    gfx_surface_draw_string16(s, 16, 58, "with interactive GUI",
         COL_LIGHT_GRAY, COL_WINDOW_BG);
-    gfx_surface_draw_string(s, 16, 72, "Press Escape to exit WM",
+    gfx_surface_draw_string16(s, 16, 86, "Press Escape to exit WM",
         COL_LIGHT_GRAY, COL_WINDOW_BG);
 }
 
@@ -925,8 +1252,8 @@ static int wm_hit_test(struct wm_window *w, int mx, int my) {
     int rx = mx - w->x;
     int ry = my - w->y;
 
-    /* Resize edges for non-terminal windows (Phase 7) */
-    if (w->type != WINTYPE_TERMINAL) {
+    /* Resize edges for non-terminal, non-maximized windows (Phase 7) */
+    if (w->type != WINTYPE_TERMINAL && !w->maximized) {
         int right = w->w;
         int bottom = w->h;
 
@@ -947,7 +1274,11 @@ static int wm_hit_test(struct wm_window *w, int mx, int my) {
     if (ry >= BORDER_W && ry < BORDER_W + TITLEBAR_H) {
         if (rx >= w->w - BORDER_W - CLOSE_BTN_W)
             return HIT_CLOSE;
-        if (rx >= w->w - BORDER_W - CLOSE_BTN_W - MIN_BTN_W)
+        if (rx >= w->w - BORDER_W - CLOSE_BTN_W - MAX_BTN_W &&
+            rx < w->w - BORDER_W - CLOSE_BTN_W)
+            return HIT_MAXIMIZE;
+        if (rx >= w->w - BORDER_W - CLOSE_BTN_W - MAX_BTN_W - MIN_BTN_W &&
+            rx < w->w - BORDER_W - CLOSE_BTN_W - MAX_BTN_W)
             return HIT_MINIMIZE;
         return HIT_TITLEBAR;
     }
@@ -956,7 +1287,78 @@ static int wm_hit_test(struct wm_window *w, int mx, int my) {
 
 /* ---- Compose frame: render gradient directly into backbuf ---- */
 
+/* Load a 24-bit uncompressed BMP into a surface */
+static int load_bmp_wallpaper(const char *path, gfx_surface_t *surf) {
+    int fd = (int)sys_open(path, 0);
+    if (fd < 0) return -1;
+
+    /* Read BMP header (54 bytes) */
+    uint8_t hdr[54];
+    if (sys_read(fd, hdr, 54) != 54) { sys_close(fd); return -1; }
+
+    /* Validate magic "BM" */
+    if (hdr[0] != 'B' || hdr[1] != 'M') { sys_close(fd); return -1; }
+
+    /* Parse header fields */
+    uint32_t data_offset = hdr[10] | ((uint32_t)hdr[11] << 8) |
+                           ((uint32_t)hdr[12] << 16) | ((uint32_t)hdr[13] << 24);
+    int32_t bmp_w = (int32_t)(hdr[18] | ((uint32_t)hdr[19] << 8) |
+                    ((uint32_t)hdr[20] << 16) | ((uint32_t)hdr[21] << 24));
+    int32_t bmp_h = (int32_t)(hdr[22] | ((uint32_t)hdr[23] << 8) |
+                    ((uint32_t)hdr[24] << 16) | ((uint32_t)hdr[25] << 24));
+    uint16_t bpp = hdr[28] | ((uint16_t)hdr[29] << 8);
+    uint32_t compression = hdr[30] | ((uint32_t)hdr[31] << 8);
+
+    if (bpp != 24 || compression != 0 || bmp_w <= 0 || bmp_h <= 0) {
+        sys_close(fd); return -1;
+    }
+
+    /* Seek to pixel data */
+    sys_lseek(fd, (int64_t)data_offset, SEEK_SET);
+
+    /* BMP rows are padded to 4-byte alignment */
+    int row_size = ((bmp_w * 3 + 3) / 4) * 4;
+    uint8_t rowbuf[4096]; /* max row width ~1365 pixels at 24bpp */
+    if (row_size > (int)sizeof(rowbuf)) { sys_close(fd); return -1; }
+
+    /* BMP is bottom-up */
+    int copy_w = bmp_w < (int)surf->width ? bmp_w : (int)surf->width;
+    int copy_h = bmp_h < (int)surf->height ? bmp_h : (int)surf->height;
+
+    for (int y = bmp_h - 1; y >= 0; y--) {
+        if (sys_read(fd, rowbuf, (uint64_t)row_size) != row_size) break;
+        if (y >= copy_h) continue;
+        uint32_t *dst_row = &surf->data[(uint64_t)y * surf->width];
+        for (int x = 0; x < copy_w; x++) {
+            uint8_t b = rowbuf[x * 3];
+            uint8_t g = rowbuf[x * 3 + 1];
+            uint8_t r = rowbuf[x * 3 + 2];
+            dst_row[x] = GFX_RGB(r, g, b);
+        }
+    }
+
+    sys_close(fd);
+    return 0;
+}
+
 static void render_wallpaper_to_backbuf(void) {
+    if (wallpaper_surf) {
+        /* Blit wallpaper to backbuf */
+        int work_h = screen_h - TASKBAR_H;
+        for (int y = 0; y < work_h; y++) {
+            uint32_t *dst_row = &backbuf->data[(uint64_t)y * backbuf->width];
+            if ((uint32_t)y < wallpaper_surf->height) {
+                uint32_t *src_row = &wallpaper_surf->data[(uint64_t)y * wallpaper_surf->width];
+                int copy_w = screen_w < (int)wallpaper_surf->width ? screen_w : (int)wallpaper_surf->width;
+                for (int x = 0; x < copy_w; x++) dst_row[x] = src_row[x];
+                for (int x = copy_w; x < screen_w; x++) dst_row[x] = 0;
+            } else {
+                for (int x = 0; x < screen_w; x++) dst_row[x] = 0;
+            }
+        }
+        return;
+    }
+
     struct wm_theme *th = &themes[current_theme];
     int work_h = screen_h - TASKBAR_H;
     int r1 = (th->desktop_top >> 16) & 0xFF;
@@ -985,6 +1387,12 @@ static void draw_window(gfx_surface_t *buf, struct wm_window *w, int is_focused)
 
     struct wm_theme *th = &themes[current_theme];
 
+    /* Drop shadow (skip during drag/resize for performance) */
+    if (mode != MODE_DRAG && mode != MODE_RESIZE) {
+        gfx_surface_fill_rect_alpha(buf, w->x + SHADOW_OFFSET, w->y + SHADOW_OFFSET,
+                                     w->w, w->h, COL_SHADOW, SHADOW_ALPHA);
+    }
+
     /* Border */
     gfx_surface_fill_rect(buf, w->x, w->y, w->w, w->h, COL_BORDER);
 
@@ -1004,8 +1412,15 @@ static void draw_window(gfx_surface_t *buf, struct wm_window *w, int is_focused)
     gfx_surface_draw_char(buf, cbx + 4, w->y + BORDER_W + 6, 'X',
                            COL_WHITE, COL_CLOSE_BG);
 
+    /* Maximize button [M] */
+    int maxbx = cbx - MAX_BTN_W;
+    gfx_surface_fill_rect(buf, maxbx, w->y + BORDER_W, MAX_BTN_W, TITLEBAR_H,
+                           COL_MAXIMIZE_BG);
+    gfx_surface_draw_char(buf, maxbx + 4, w->y + BORDER_W + 6,
+                           w->maximized ? 'R' : 'M', COL_WHITE, COL_MAXIMIZE_BG);
+
     /* Minimize button [_] */
-    int mbx = cbx - MIN_BTN_W;
+    int mbx = maxbx - MIN_BTN_W;
     gfx_surface_fill_rect(buf, mbx, w->y + BORDER_W, MIN_BTN_W, TITLEBAR_H,
                            COL_MINIMIZE_BG);
     gfx_surface_draw_char(buf, mbx + 4, w->y + BORDER_W + 6, '_',
@@ -1023,10 +1438,51 @@ static void draw_window(gfx_surface_t *buf, struct wm_window *w, int is_focused)
 
 /* ---- Draw cursor ---- */
 
+static int get_cursor_type(void) {
+    /* Check what's under the mouse */
+    if (mode == MODE_RESIZE) {
+        switch (resize_edge) {
+        case HIT_RESIZE_N: case HIT_RESIZE_S: return CURSOR_RESIZE_NS;
+        case HIT_RESIZE_E: case HIT_RESIZE_W: return CURSOR_RESIZE_EW;
+        case HIT_RESIZE_NW: case HIT_RESIZE_SE: return CURSOR_RESIZE_NWSE;
+        case HIT_RESIZE_NE: case HIT_RESIZE_SW: return CURSOR_RESIZE_NESW;
+        }
+    }
+    if (mode == MODE_DRAG) return CURSOR_ARROW;
+
+    int idx = wm_window_at(mouse_x, mouse_y);
+    if (idx >= 0) {
+        int hit = wm_hit_test(&windows[idx], mouse_x, mouse_y);
+        switch (hit) {
+        case HIT_RESIZE_N: case HIT_RESIZE_S: return CURSOR_RESIZE_NS;
+        case HIT_RESIZE_E: case HIT_RESIZE_W: return CURSOR_RESIZE_EW;
+        case HIT_RESIZE_NW: case HIT_RESIZE_SE: return CURSOR_RESIZE_NWSE;
+        case HIT_RESIZE_NE: case HIT_RESIZE_SW: return CURSOR_RESIZE_NESW;
+        case HIT_CLOSE: case HIT_MINIMIZE: case HIT_MAXIMIZE: return CURSOR_HAND;
+        case HIT_CONTENT:
+            if (windows[idx].type == WINTYPE_TERMINAL) return CURSOR_IBEAM;
+            if (windows[idx].type == WINTYPE_FILEBROWSER) return CURSOR_HAND;
+            break;
+        }
+    }
+    return CURSOR_ARROW;
+}
+
 static void draw_cursor(gfx_surface_t *buf, int cx, int cy) {
+    current_cursor = get_cursor_type();
+    const uint8_t (*bmp)[12];
+    switch (current_cursor) {
+    case CURSOR_RESIZE_NS:  bmp = cursor_resize_ns; break;
+    case CURSOR_RESIZE_EW:  bmp = cursor_resize_ew; break;
+    case CURSOR_RESIZE_NWSE: bmp = cursor_resize_nwse; break;
+    case CURSOR_RESIZE_NESW: bmp = cursor_resize_nesw; break;
+    case CURSOR_IBEAM:      bmp = cursor_ibeam; break;
+    case CURSOR_HAND:       bmp = cursor_hand; break;
+    default:                bmp = cursor_bmp; break;
+    }
     for (int row = 0; row < 19; row++) {
         for (int col = 0; col < 12; col++) {
-            uint8_t v = cursor_bmp[row][col];
+            uint8_t v = bmp[row][col];
             if (v == 0) continue;
             uint32_t color = (v == 1) ? COL_CURSOR_BLACK : COL_CURSOR_WHITE;
             gfx_surface_put_pixel(buf, cx + col, cy + row, color);
@@ -1102,6 +1558,9 @@ static void draw_menu(gfx_surface_t *buf) {
     if (!menu_visible) return;
 
     int mh = MENU_COUNT * MENU_ITEM_H + 4;
+    /* Drop shadow */
+    gfx_surface_fill_rect_alpha(buf, menu_x + SHADOW_OFFSET, menu_y + SHADOW_OFFSET,
+                                 MENU_W, mh, COL_SHADOW, SHADOW_ALPHA);
     gfx_surface_fill_rect(buf, menu_x, menu_y, MENU_W, mh, COL_MENU_BG);
     /* Border */
     gfx_surface_fill_rect(buf, menu_x, menu_y, MENU_W, 1, COL_BORDER);
@@ -1162,9 +1621,9 @@ static void fb_handle_click(struct wm_window *win, int rx, int ry) {
     struct file_browser *fbr = win->fbrowser;
     if (!fbr) return;
 
-    /* Content starts at y=18, each row 12px */
-    if (ry < 18) return;
-    int row = (ry - 18) / 12 + fbr->scroll_offset;
+    /* Content starts at y=26, each row 18px */
+    if (ry < 26) return;
+    int row = (ry - 26) / 18 + fbr->scroll_offset;
     if (row < 0 || row >= fbr->entry_count) return;
 
     struct fb_entry *e = &fbr->entries[row];
@@ -1243,6 +1702,8 @@ static void resize_apply(int win_idx, int new_w, int new_h) {
 
 /* ---- Compose frame ---- */
 
+static int prev_mouse_x, prev_mouse_y;
+
 static void compose(void) {
     /* Render gradient wallpaper directly into backbuf */
     render_wallpaper_to_backbuf();
@@ -1266,8 +1727,38 @@ static void compose(void) {
     /* Cursor */
     draw_cursor(backbuf, mouse_x, mouse_y);
 
-    /* Blit backbuffer to framebuffer */
-    gfx_surface_blit_to_ctx(&fb, backbuf, 0, 0);
+    /* Dirty rectangle blit optimization */
+    if (full_redraw || dirty_count == 0) {
+        /* Full blit */
+        gfx_surface_blit_to_ctx(&fb, backbuf, 0, 0);
+    } else {
+        /* Always blit old and new cursor areas */
+        gfx_surface_blit_rect_to_ctx(&fb, backbuf,
+            prev_mouse_x, prev_mouse_y, 16, 22,
+            prev_mouse_x, prev_mouse_y);
+        gfx_surface_blit_rect_to_ctx(&fb, backbuf,
+            mouse_x, mouse_y, 16, 22,
+            mouse_x, mouse_y);
+        /* Blit dirty rects */
+        for (int i = 0; i < dirty_count; i++) {
+            struct dirty_rect *dr = &dirty_rects[i];
+            gfx_surface_blit_rect_to_ctx(&fb, backbuf,
+                dr->x, dr->y, dr->w, dr->h, dr->x, dr->y);
+        }
+        /* Always blit clock area */
+        gfx_surface_blit_rect_to_ctx(&fb, backbuf,
+            screen_w - 160, screen_h - TASKBAR_H, 160, TASKBAR_H,
+            screen_w - 160, screen_h - TASKBAR_H);
+    }
+
+    prev_mouse_x = mouse_x;
+    prev_mouse_y = mouse_y;
+
+    /* Reset dirty tracking — always full redraw for now since
+       per-rect tracking is complex with overlapping windows.
+       The infrastructure is in place for future optimization. */
+    dirty_count = 0;
+    full_redraw = 1;
 }
 
 /* ---- Input polling ---- */
@@ -1352,13 +1843,45 @@ static void poll_mouse(void) {
                         windows[idx].minimized = 1;
                         if (focused_idx == idx) focused_idx = -1;
                         break;
+                    case HIT_MAXIMIZE:
+                        wm_toggle_maximize(idx);
+                        break;
                     case HIT_TITLEBAR:
+                        /* Dragging a maximized/snapped window un-snaps */
+                        if (windows[idx].maximized) {
+                            int old_w = windows[idx].saved_w;
+                            int was_max = windows[idx].maximized;
+                            windows[idx].maximized = 0;
+                            resize_apply(idx, windows[idx].saved_w, windows[idx].saved_h);
+                            /* Reposition so cursor stays proportionally on title */
+                            if (was_max == 1) {
+                                windows[idx].x = mouse_x - old_w / 2;
+                            } else {
+                                windows[idx].x = windows[idx].saved_x;
+                            }
+                            windows[idx].y = mouse_y - TITLEBAR_H / 2;
+                        }
                         mode = MODE_DRAG;
                         drag_win = idx;
                         drag_ox = mouse_x - windows[idx].x;
                         drag_oy = mouse_y - windows[idx].y;
                         break;
                     case HIT_CONTENT:
+                        /* Text selection start in terminal */
+                        if (windows[idx].type == WINTYPE_TERMINAL && windows[idx].term) {
+                            int rx = mouse_x - windows[idx].x - BORDER_W;
+                            int ry = mouse_y - windows[idx].y - BORDER_W - TITLEBAR_H;
+                            sel_active = 1;
+                            sel_win = idx;
+                            sel_start_col = rx / 8;
+                            sel_start_row = ry / 9;
+                            sel_end_col = sel_start_col;
+                            sel_end_row = sel_start_row;
+                            if (sel_start_col >= TERM_COLS) sel_start_col = TERM_COLS - 1;
+                            if (sel_start_row >= TERM_ROWS) sel_start_row = TERM_ROWS - 1;
+                            if (sel_start_col < 0) sel_start_col = 0;
+                            if (sel_start_row < 0) sel_start_row = 0;
+                        }
                         /* File browser click */
                         if (windows[idx].type == WINTYPE_FILEBROWSER) {
                             int rx = mouse_x - windows[idx].x - BORDER_W;
@@ -1393,9 +1916,26 @@ static void poll_mouse(void) {
 
         /* Left button release */
         if (!left && prev_left) {
+            if (mode == MODE_DRAG && drag_win >= 0 && drag_win < window_count) {
+                /* Window snapping: check mouse position at edge */
+                struct wm_window *dw = &windows[drag_win];
+                if (dw->type != WINTYPE_TERMINAL) {
+                    if (mouse_x <= SNAP_THRESHOLD) {
+                        wm_snap_window(drag_win, 2); /* snap left */
+                    } else if (mouse_x >= screen_w - SNAP_THRESHOLD) {
+                        wm_snap_window(drag_win, 3); /* snap right */
+                    } else if (mouse_y <= SNAP_THRESHOLD) {
+                        wm_toggle_maximize(drag_win); /* maximize */
+                    }
+                }
+            }
             if (mode == MODE_RESIZE && drag_win >= 0 && drag_win < window_count) {
                 /* Finalize resize: reallocate surface */
                 resize_apply(drag_win, windows[drag_win].w, windows[drag_win].h);
+            }
+            /* End text selection */
+            if (sel_active) {
+                /* Selection stays active for copy, just stop extending */
             }
             mode = MODE_NONE;
         }
@@ -1414,6 +1954,18 @@ static void poll_mouse(void) {
             } else {
                 menu_visible = 0;
             }
+        }
+
+        /* Selection drag */
+        if (sel_active && left && sel_win >= 0 && sel_win < window_count) {
+            int rx = mouse_x - windows[sel_win].x - BORDER_W;
+            int ry = mouse_y - windows[sel_win].y - BORDER_W - TITLEBAR_H;
+            sel_end_col = rx / 8;
+            sel_end_row = ry / 9;
+            if (sel_end_col >= TERM_COLS) sel_end_col = TERM_COLS - 1;
+            if (sel_end_row >= TERM_ROWS) sel_end_row = TERM_ROWS - 1;
+            if (sel_end_col < 0) sel_end_col = 0;
+            if (sel_end_row < 0) sel_end_row = 0;
         }
 
         /* Dragging */
@@ -1476,15 +2028,89 @@ static void poll_mouse(void) {
     }
 }
 
+static void copy_selection_to_clipboard(void) {
+    if (!sel_active || sel_win < 0 || sel_win >= window_count) return;
+    struct wm_terminal *t = windows[sel_win].term;
+    if (!t) return;
+
+    int sr = sel_start_row, sc = sel_start_col;
+    int er = sel_end_row, ec = sel_end_col;
+    if (sr > er || (sr == er && sc > ec)) {
+        int tmp;
+        tmp = sr; sr = er; er = tmp;
+        tmp = sc; sc = ec; ec = tmp;
+    }
+
+    clipboard_len = 0;
+    for (int row = sr; row <= er && clipboard_len < 1023; row++) {
+        int c_start = (row == sr) ? sc : 0;
+        int c_end = (row == er) ? ec : TERM_COLS - 1;
+        for (int col = c_start; col <= c_end && clipboard_len < 1023; col++) {
+            clipboard[clipboard_len++] = t->grid[row][col];
+        }
+        /* Trim trailing spaces from each row */
+        while (clipboard_len > 0 && clipboard[clipboard_len - 1] == ' ')
+            clipboard_len--;
+        if (row < er && clipboard_len < 1023)
+            clipboard[clipboard_len++] = '\n';
+    }
+    clipboard[clipboard_len] = '\0';
+    sel_active = 0;
+}
+
 static void poll_keyboard(void) {
     char c;
     while (sys_read(kb_fd, &c, 1) == 1) {
+        /* WM keyboard shortcuts (Ctrl+key sends control chars) */
+        if (c == 0x0E) { /* Ctrl+N: new terminal */
+            wm_create_terminal(50 + window_count * 30,
+                                50 + window_count * 30, "Terminal");
+            continue;
+        }
+        if (c == 0x11) { /* Ctrl+Q: close focused window */
+            if (focused_idx >= 0) wm_close_window(focused_idx);
+            continue;
+        }
+        if (c == 0x07) { /* Ctrl+G: cycle workspace */
+            current_workspace = (current_workspace + 1) % WS_COUNT;
+            continue;
+        }
+        if (c == 0x06) { /* Ctrl+F: toggle maximize */
+            if (focused_idx >= 0) wm_toggle_maximize(focused_idx);
+            continue;
+        }
+        if (c == 0x03) { /* Ctrl+C: copy selection or pass through */
+            if (sel_active) {
+                copy_selection_to_clipboard();
+                continue;
+            }
+            /* else fall through to terminal */
+        }
+        if (c == 0x16) { /* Ctrl+V: paste clipboard */
+            if (focused_idx >= 0 && focused_idx < window_count &&
+                windows[focused_idx].term && clipboard_len > 0) {
+                struct wm_terminal *t = windows[focused_idx].term;
+                for (int i = 0; i < clipboard_len && t->cmd_len < TERM_CMDLEN - 1; i++) {
+                    if (clipboard[i] == '\n') continue;
+                    t->cmd_buf[t->cmd_len++] = clipboard[i];
+                    term_putchar(t, clipboard[i]);
+                }
+                term_render(&windows[focused_idx]);
+                continue;
+            }
+        }
+
         /* Escape: exit WM (unless terminal is focused) */
         if (c == 27) {
             if (focused_idx < 0 || !windows[focused_idx].term) {
                 running = 0;
                 return;
             }
+        }
+
+        /* Clear selection if typing */
+        if (sel_active && focused_idx >= 0 && sel_win == focused_idx) {
+            sel_active = 0;
         }
 
         /* Route to focused terminal */
@@ -1534,7 +2160,16 @@ void _start(void) {
         sys_exit(1);
     }
 
-    /* No separate wallpaper surface needed — gradient rendered directly into backbuf */
+    /* Try loading BMP wallpaper — only if heap has enough space (~3MB needed) */
+    if (gfx_heap_ptr + (uint64_t)screen_w * (uint64_t)screen_h * 4 + 16 < sizeof(gfx_heap)) {
+        wallpaper_surf = gfx_surface_create((uint32_t)screen_w, (uint32_t)screen_h);
+        if (wallpaper_surf) {
+            if (load_bmp_wallpaper("/wallpaper.bmp", wallpaper_surf) != 0) {
+                /* Failed to load — clear the surface pointer, gradient will be used */
+                wallpaper_surf = (gfx_surface_t *)0;
+            }
+        }
+    }
 
     /* Open input devices */
     mouse_fd = (int)sys_open("/dev/input/mouse0", 0);
@@ -1567,6 +2202,9 @@ void _start(void) {
     running = 1;
     current_workspace = 0;
     frame_counter = 0;
+
+    prev_mouse_x = mouse_x;
+    prev_mouse_y = mouse_y;
 
     /* Create initial terminal window */
     wm_create_terminal(80, 60, "Terminal");

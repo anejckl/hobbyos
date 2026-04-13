@@ -101,10 +101,17 @@ static void keyboard_handler(struct interrupt_frame *frame) {
     else if (kb_caps && c >= 'A' && c <= 'Z')
         c += 32;
 
-    /* Ctrl+key: send control character to TTY */
+    /* Ctrl+key: send control character to TTY and kb_buffer */
     if (kb_ctrl) {
         if (c >= 'a' && c <= 'z') {
-            tty_input_char((char)(c - 'a' + 1));
+            char ctrl_c = (char)(c - 'a' + 1);
+            tty_input_char(ctrl_c);
+            /* Also write to raw buffer for /dev/input/keyboard consumers (e.g., WM) */
+            uint32_t next = (kb_write_idx + 1) % KB_BUFFER_SIZE;
+            if (next != kb_read_idx) {
+                kb_buffer[kb_write_idx] = ctrl_c;
+                kb_write_idx = next;
+            }
             return;
         }
     }
