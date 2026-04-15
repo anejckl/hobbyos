@@ -221,7 +221,7 @@ hobbyos/
 │   ├── drivers/
 │   │   ├── driver.h             # Generic driver interface
 │   │   ├── vga.c / vga.h       # 80×25 text mode, printf (%s %d %u %x %p %c %%)
-│   │   ├── keyboard.c / .h     # PS/2, IRQ 1, scan code Set 1, circular buffer
+│   │   ├── keyboard.c / .h     # PS/2 (IRQ 1) + COM1 serial RX (IRQ 4), scan code Set 1, circular buffer
 │   │   ├── pit.c / pit.h       # PIT channel 0, calls scheduler_tick()
 │   │   └── ata.c / ata.h       # ATA PIO disk driver (LBA28, read/write sectors)
 │   │

@@ -3,6 +3,7 @@
 #include "pit.h"
 #include "../arch/x86_64/isr.h"
 #include "../interrupts/interrupts.h"
+#include "../debug/debug.h"
 
 /* Circular buffer */
 #define KB_BUFFER_SIZE 256
@@ -128,10 +129,41 @@ static void keyboard_handler(struct interrupt_frame *frame) {
     }
 }
 
+/* COM1 (IRQ 4) receive handler. Lets keyboard input arrive via the serial
+ * line in addition to the PS/2 port, so the ttyd-wrapped web-terminal
+ * deployment (os.anej.dev) can feed browser keystrokes to the shell.
+ * Bytes drop straight into the same ring buffer + TTY line discipline the
+ * PS/2 driver uses, so Ctrl+C, canonical line editing, etc. keep working. */
+static void serial_rx_handler(struct interrupt_frame *frame) {
+    (void)frame;
+
+    /* Drain every byte the UART has queued this IRQ */
+    while (inb(COM1_PORT + 5) & 0x01) {
+        char c = (char)inb(COM1_PORT);
+
+        /* Terminals send CR on Enter; canonical mode terminates lines on LF */
+        if (c == 0x0d) c = 0x0a;
+        if (c == 0)    continue;
+
+        tty_input_char(c);
+
+        uint32_t next = (kb_write_idx + 1) % KB_BUFFER_SIZE;
+        if (next != kb_read_idx) {
+            kb_buffer[kb_write_idx] = c;
+            kb_write_idx = next;
+        }
+    }
+}
+
 void keyboard_init(void) {
     kb_read_idx = 0;
     kb_write_idx = 0;
     irq_register_handler(1, keyboard_handler);
+
+    /* Route COM1 receive (IRQ 4) into the same keyboard buffer and enable
+     * the UART's received-data-available interrupt in the IER register. */
+    irq_register_handler(4, serial_rx_handler);
+    outb(COM1_PORT + 1, 0x01);
 }
 
 int keyboard_haschar(void) {
