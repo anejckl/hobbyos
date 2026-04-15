@@ -241,7 +241,7 @@ hobbyos/
 │   ├── user_programs.c / .h    # Embedded user program registry (find by name)
 │   │
 │   └── debug/
-│       └── debug.c / debug.h   # COM1 serial (38400 baud, 8-N-1)
+│       └── debug.c / debug.h   # COM1 serial (38400 baud, 8-N-1, IER RX enabled so keystrokes raise IRQ 4)
 │
 ├── user/
 │   ├── syscall.h               # User-space syscall wrappers (inline INT 0x80)
@@ -333,7 +333,7 @@ hobbyos/
 
 - Master: IRQ 0–7 → INT 32–39
 - Slave: IRQ 8–15 → INT 40–47
-- Timer = IRQ 0 (INT 32), Keyboard = IRQ 1 (INT 33)
+- Timer = IRQ 0 (INT 32), Keyboard = IRQ 1 (INT 33), COM1 serial RX = IRQ 4 (INT 36)
 
 ## Conventions
 
@@ -514,7 +514,7 @@ Then:
 
 6. **Disabling PIT stops scheduling entirely.** Timer IRQ drives `scheduler_tick()`.
 
-7. **`keyboard_getchar()` is blocking** — it halts until a keypress interrupt.
+7. **`keyboard_getchar()` is blocking** — it halts until a keypress interrupt. The ring buffer is fed by two IRQs: PS/2 on IRQ 1 *and* COM1 serial RX on IRQ 4, so headless/remote deployments (ttyd wrapping QEMU, virtio-serial, etc.) work without a PS/2 controller at all.
 
 8. **Boot page tables use 2 MB huge pages.** VMM adds 4 KB pages on top but doesn't replace them.
 

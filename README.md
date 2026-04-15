@@ -85,12 +85,12 @@ make run
 
 ### Drivers
 - **VGA text mode** (80x25) with framebuffer console (1024x768 32bpp)
-- **PS/2 keyboard** (IRQ 1, scan code Set 1, Shift/Ctrl/CapsLock)
+- **PS/2 keyboard** (IRQ 1, scan code Set 1, Shift/Ctrl/CapsLock) — ring buffer is also fed from COM1 serial RX (IRQ 4), so headless/remote consoles work without a PS/2 controller
 - **PS/2 mouse** (IRQ 12, relative movement + buttons)
 - **PIT timer** (100 Hz system clock)
 - **ATA PIO** disk driver (LBA28 read/write)
 - **PCI bus** enumeration
-- **Serial COM1** debug output (38400 baud)
+- **Serial COM1** (38400 baud, 8-N-1) — bidirectional: mirrors `vga_printf()` output for debug/logging and receives keystrokes into the keyboard ring buffer via IRQ 4
 
 ### User Space
 - **35+ user programs** compiled as flat ELF binaries at `0x400000`
@@ -104,6 +104,20 @@ make run
 - **69 QEMU smoke tests** (boot + autotest integration)
 - **38 interactive tests** (keystroke injection via QEMU monitor)
 - **Native QEMU sendkeys** test script for Windows
+
+---
+
+## Live Demo
+
+A public instance runs at **https://os.anej.dev** (basic auth — credentials on request). Each browser connection spawns its own `qemu-system-x86_64` subprocess against a read-only ISO, so state is discarded on disconnect and every session starts from a fresh kernel boot. The architecture is:
+
+```
+browser  ──https──►  Caddy (TLS + basic auth)  ──►  ttyd  ──►  qemu-system-x86_64
+                                                                 │
+                                                                 └── hobbyos.iso (read-only)
+```
+
+Browser keystrokes flow as: `xterm.js → WebSocket → ttyd → qemu stdio → COM1 → IRQ 4 → keyboard ring buffer → shell`. This is why the kernel accepts input on both PS/2 IRQ 1 *and* COM1 IRQ 4 — the same driver path serves local QEMU windows and the headless ttyd-wrapped deployment.
 
 ---
 
