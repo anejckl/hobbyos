@@ -89,6 +89,10 @@ extern const uint8_t _binary_nonblock_test_elf_start[];
 extern const uint8_t _binary_nonblock_test_elf_end[];
 extern const uint8_t _binary_wm_elf_start[];
 extern const uint8_t _binary_wm_elf_end[];
+extern const uint8_t _binary_libc_test_elf_start[];
+extern const uint8_t _binary_libc_test_elf_end[];
+extern const uint8_t _binary_tcc_elf_start[];
+extern const uint8_t _binary_tcc_elf_end[];
 
 static const struct user_program programs[] = {
     {
@@ -306,6 +310,16 @@ static const struct user_program programs[] = {
         .data = _binary_wm_elf_start,
         .size = 0
     },
+    {
+        .name = "libc_test",
+        .data = _binary_libc_test_elf_start,
+        .size = 0
+    },
+    {
+        .name = "tcc",
+        .data = _binary_tcc_elf_start,
+        .size = 0
+    },
     { NULL, NULL, 0 }
 };
 
@@ -396,6 +410,10 @@ static uint64_t program_size(const uint8_t *data) {
         return (uint64_t)(_binary_nonblock_test_elf_end - _binary_nonblock_test_elf_start);
     if (data == _binary_wm_elf_start)
         return (uint64_t)(_binary_wm_elf_end - _binary_wm_elf_start);
+    if (data == _binary_libc_test_elf_start)
+        return (uint64_t)(_binary_libc_test_elf_end - _binary_libc_test_elf_start);
+    if (data == _binary_tcc_elf_start)
+        return (uint64_t)(_binary_tcc_elf_end - _binary_tcc_elf_start);
     return 0;
 }
 

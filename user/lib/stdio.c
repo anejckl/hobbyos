@@ -1,10 +1,22 @@
 #include "libc.h"
 
-/* vsnprintf: supports %d %u %x %s %c %p %% %ld %lu %lx */
+/* vsnprintf: supports %d %u %x %s %c %p %% %ld %lu %lx
+ *
+ * Return value matches real C99 snprintf semantics: the number of bytes
+ * that WOULD have been written if the buffer were big enough, not capped
+ * at `size` — callers can compare the return value against `size` to
+ * detect truncation and retry with a bigger buffer (see printf/fprintf
+ * below). `pos` (bounded, what actually lands in buf) and `needed`
+ * (unbounded, the true length) are tracked separately. */
 int vsnprintf(char *buf, size_t size, const char *fmt, __builtin_va_list ap) {
     size_t pos = 0;
+    size_t needed = 0;
 
-#define PUTC(c) do { if (pos + 1 < size) buf[pos++] = (c); } while (0)
+#define PUTC(c) do { \
+        char _ch_ = (c); \
+        if (pos + 1 < size) buf[pos++] = _ch_; \
+        needed++; \
+    } while (0)
 
     for (const char *f = fmt; *f; f++) {
         if (*f != '%') {
@@ -119,7 +131,7 @@ int vsnprintf(char *buf, size_t size, const char *fmt, __builtin_va_list ap) {
     }
 
     if (size > 0) buf[pos] = '\0';
-    return (int)pos;
+    return (int)needed;
 }
 
 int snprintf(char *buf, size_t size, const char *fmt, ...) {
@@ -136,8 +148,26 @@ int printf(const char *fmt, ...) {
     __builtin_va_start(ap, fmt);
     int n = vsnprintf(buf, sizeof(buf), fmt, ap);
     __builtin_va_end(ap);
-    sys_write_libc(1, buf, (size_t)n);
-    return n;
+
+    if (n < 0) return n;
+    if ((size_t)n < sizeof(buf)) {
+        sys_write_libc(1, buf, (size_t)n);
+        return n;
+    }
+
+    /* Truncated — the true length didn't fit; retry once with a
+     * heap buffer sized exactly to it. */
+    char *big = (char *)malloc((size_t)n + 1);
+    if (!big) {
+        sys_write_libc(1, buf, sizeof(buf) - 1);
+        return (int)(sizeof(buf) - 1);
+    }
+    __builtin_va_start(ap, fmt);
+    int n2 = vsnprintf(big, (size_t)n + 1, fmt, ap);
+    __builtin_va_end(ap);
+    sys_write_libc(1, big, (size_t)n2);
+    free(big);
+    return n2;
 }
 
 int puts(const char *s) {
@@ -172,8 +202,26 @@ int fprintf(int fd, const char *fmt, ...) {
     __builtin_va_start(ap, fmt);
     int n = vsnprintf(buf, sizeof(buf), fmt, ap);
     __builtin_va_end(ap);
-    sys_write_libc(fd, buf, (size_t)n);
-    return n;
+
+    if (n < 0) return n;
+    if ((size_t)n < sizeof(buf)) {
+        sys_write_libc(fd, buf, (size_t)n);
+        return n;
+    }
+
+    /* Truncated — the true length didn't fit; retry once with a
+     * heap buffer sized exactly to it. */
+    char *big = (char *)malloc((size_t)n + 1);
+    if (!big) {
+        sys_write_libc(fd, buf, sizeof(buf) - 1);
+        return (int)(sizeof(buf) - 1);
+    }
+    __builtin_va_start(ap, fmt);
+    int n2 = vsnprintf(big, (size_t)n + 1, fmt, ap);
+    __builtin_va_end(ap);
+    sys_write_libc(fd, big, (size_t)n2);
+    free(big);
+    return n2;
 }
 
 int putchar(int c) {

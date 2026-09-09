@@ -12,72 +12,37 @@ make test         # Run all tests (host unit tests + QEMU smoke test)
 make test-host    # Run host-side unit tests only (fast, no QEMU)
 make test-qemu    # Run QEMU boot smoke test only (requires 'make iso')
 make test-interactive  # Interactive QEMU tests (~60-90s, sends keystrokes, checks serial)
-make test-native       # Native Windows QEMU tests (TCP serial, catches version-specific bugs)
 make install-hooks # Install git pre-commit hook (runs test-host)
 ```
 
 ## Development Environment
 
-This project is developed on **Windows 11 with Git Bash**. There is **no native gcc, nasm, or make** — all building and testing happens through **Docker**. QEMU **is** installed natively for interactive testing.
+This project is developed **natively on Linux**. `gcc`/`x86_64-elf-gcc`, `nasm`, `make`, `grub-mkrescue`, `xorriso`, `mtools`, and `qemu-system-x86_64` are all installed directly on the host — **no Docker or Windows/Git Bash layer is needed or used.**
 
-### How to Build and Test (the ONLY way that works)
+### How to Build and Test
 
 ```bash
-# Build the Docker image (one-time, has gcc + nasm + grub + qemu):
-MSYS_NO_PATHCONV=1 docker build -t hobbyos-test .
-
-# Run any make target inside Docker:
-MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test make test
-MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test make test-host
-MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test make iso
-MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test make test-qemu
-MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test make test-interactive
+make              # kernel.bin
+make iso          # hobbyos.iso
+make test         # test-host + test-qemu
+make test-host    # fast host unit tests, no QEMU
+make test-qemu    # QEMU boot smoke test (builds iso first via dependency)
+make test-interactive  # sends keystrokes to QEMU, checks serial (~60-90s)
 ```
 
-### Critical: Docker Volume Mount on Windows/MSYS2
+Just run these directly — no volume mounts, no path translation, no container image to build first.
 
-- **Always** prefix Docker commands with `MSYS_NO_PATHCONV=1` — without it, Git Bash mangles `/hobbyos` into `C:/Program Files/Git/hobbyos`.
-- **Always** use the full Windows path `C:/Users/Uporabnik/Documents/hobbyos:/hobbyos` — do NOT use `$(pwd)` as it expands incorrectly in Git Bash.
-- The Dockerfile's `WORKDIR` is `/hobbyos`, which matches the mount target.
+### Toolchain
+
+The Makefile auto-detects a cross toolchain: `CC := x86_64-elf-gcc` if present on `PATH`, else falls back to the system `gcc` (both work — this host has `x86_64-elf-gcc`/`-ld`/`-objcopy` installed, so builds use the cross toolchain automatically). Native `gcc` is a recent version (16.x); its default C standard changed, so `CFLAGS`/`USER_CFLAGS`/`SO_CFLAGS` explicitly pass `-std=c11` — don't remove that flag or headers relying on C11 features may fail to parse.
 
 ### GitHub CLI (`gh`)
 
-```bash
-# gh is installed at this path — add to PATH before use:
-export PATH="$PATH:/c/Program Files/GitHub CLI"
-
-# Then use normally:
-gh run list
-gh run view <run-id>
-gh run watch <run-id>
-gh repo view --json visibility
-```
-
-### Checking CI Status
-
-```bash
-export PATH="$PATH:/c/Program Files/GitHub CLI"
-
-# List recent workflow runs:
-gh run list --limit 5
-
-# Watch a running workflow (blocks until done):
-gh run watch <run-id>
-
-# View details of a specific run:
-gh run view <run-id>
-
-# Rerun a failed workflow:
-gh run rerun <run-id>
-
-# If rerun fails with "cannot be retried" (e.g. startup_failure),
-# push an empty commit to trigger a fresh run:
-git commit --allow-empty -m "Trigger CI" && git push
-```
+Not installed in this environment. If GitHub interaction is needed, check with `which gh` first — if absent, use `git` directly (fetch, log, remote) or ask the user to run `gh` commands themselves via `!<command>`.
 
 ### Interactive Test Output (`make test-interactive`)
 
-Runs 21 tests by sending keystrokes to QEMU via monitor socket and checking serial output. Creates a fresh ext2 disk image, boots the OS, waits for autotests to pass, then exercises shell commands, user programs, ext2 operations, TTY editing, and Ctrl+C.
+Sends keystrokes to QEMU via monitor socket and checks serial output. Creates a fresh ext2 disk image, boots the OS, waits for autotests to pass, then exercises shell commands, user programs, ext2 operations, TTY editing, and Ctrl+C.
 
 **Output files:**
 - `tests/interactive_serial.log` — Full serial transcript from QEMU
@@ -90,58 +55,48 @@ Runs 21 tests by sending keystrokes to QEMU via monitor socket and checking seri
 
 **For AI agents:** After running `make test-interactive`, read `tests/interactive_results.json` to see which tests passed/failed and inspect `tests/interactive_serial.log` for debugging.
 
-**WARNING — Timing sensitivity:** Interactive tests run inside Docker with QEMU TCG (software emulation), which has variable timing. Tests that pass natively may fail in Docker due to slower keystroke delivery or delayed serial output. If interactive tests fail but `test-host` and `test-qemu` both pass, **re-run once before investigating** — a single failure is likely a timing fluke, not a real bug. Only investigate if failures are reproducible across 2-3 consecutive runs.
+**WARNING — Timing sensitivity:** QEMU TCG (software emulation) has variable timing. If interactive tests fail but `test-host` and `test-qemu` both pass, **re-run once before investigating** — a single failure is likely a timing fluke, not a real bug. Only investigate if failures are reproducible across 2-3 consecutive runs.
 
 ### Line Endings
 
-- `.gitattributes` enforces LF in the repository.
-- Windows tools may create files with CRLF. Fix with: `sed -i 's/\r$//' <file>`
-- If `make` fails with "No rule to make target", check for CRLF in the Makefile: `file Makefile` should say "ASCII text", NOT "with CRLF line terminators".
+- `.gitattributes` enforces LF in the repository — shouldn't be an issue on native Linux, but if a file was ever edited on Windows check with `file <path>` (should say "ASCII text", not "with CRLF line terminators") and fix with `sed -i 's/\r$//' <file>`.
 
 ### Running Interactively (Native QEMU)
 
-After building the ISO via Docker, launch QEMU natively to get a GUI window for interactive testing:
-
 ```bash
 # Basic (no disk):
-/c/msys64/ucrt64/bin/qemu-system-x86_64.exe \
-  -cdrom C:/Users/Uporabnik/Documents/hobbyos/hobbyos.iso \
-  -serial stdio -m 128M -no-reboot -no-shutdown
+qemu-system-x86_64 -cdrom hobbyos.iso -serial stdio -m 128M -no-reboot -no-shutdown
 
-# With ext2 disk (needed for file redirects, ext2 commands):
-/c/msys64/ucrt64/bin/qemu-system-x86_64.exe \
-  -cdrom C:/Users/Uporabnik/Documents/hobbyos/hobbyos.iso \
-  -serial stdio -m 128M -no-reboot -no-shutdown \
-  -drive file=C:/Users/Uporabnik/Documents/hobbyos/test_disk.img,format=raw,if=ide \
-  -net nic,model=e1000 -net user
+# With ext2 disk (needed for file redirects, ext2 commands) + networking, same as `make run`:
+qemu-system-x86_64 -cdrom hobbyos.iso -serial stdio -m 128M -no-reboot -no-shutdown \
+  -drive file=disk.img,format=raw,if=ide \
+  -netdev user,id=net0,hostfwd=tcp::8080-:80 -device e1000,netdev=net0
 
-# With monitor socket (for sendkey injection via tests/qemu_sendkeys.py):
-/c/msys64/ucrt64/bin/qemu-system-x86_64.exe \
-  -cdrom C:/Users/Uporabnik/Documents/hobbyos/hobbyos.iso \
-  -serial stdio -m 128M -no-reboot -no-shutdown \
+# With monitor socket (for sendkey injection via tests/test_interactive.py):
+qemu-system-x86_64 -cdrom hobbyos.iso -serial stdio -m 128M -no-reboot -no-shutdown \
   -monitor tcp:127.0.0.1:4444,server,nowait \
-  -drive file=C:/Users/Uporabnik/Documents/hobbyos/test_disk.img,format=raw,if=ide \
-  -net nic,model=e1000 -net user
+  -drive file=disk.img,format=raw,if=ide
 ```
 
-- QEMU binary path: `/c/msys64/ucrt64/bin/qemu-system-x86_64.exe`
 - VGA output appears in the QEMU GUI window; serial debug output appears in the terminal
 - Use `run_in_background: true` when launching from Claude Code so the window stays open for the user
 - **CRITICAL: Disk must use `if=ide` without `index=N`.** The kernel ATA driver only checks the primary IDE controller (0x1F0). Using `index=1` puts the disk on the secondary controller, which the driver won't detect. The `-cdrom` flag uses a separate IDE channel and doesn't conflict.
-- Create the test disk via Docker: `MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test bash -c "dd if=/dev/zero of=/hobbyos/test_disk.img bs=1M count=16 2>/dev/null && mkfs.ext2 -F /hobbyos/test_disk.img >/dev/null 2>&1"`
+- Create/refresh the ext2 disk image with `make disk.img`, or directly: `dd if=/dev/zero of=disk.img bs=1M count=16 && mkfs.ext2 -F disk.img`
 
 ### Native Tool Availability
 
-| Tool | Available? | Path / How to use |
-|------|-----------|-------------------|
-| `gcc` | No | Use Docker |
-| `nasm` | No | Use Docker |
-| `make` | No (in bash) | Use Docker |
-| `grub-mkrescue` | No | Use Docker |
-| `qemu-system-x86_64` | **Yes** | `/c/msys64/ucrt64/bin/qemu-system-x86_64.exe` |
-| `docker` | Yes | Direct from Git Bash |
-| `gh` (GitHub CLI) | Yes | `/c/Program Files/GitHub CLI/gh` (needs PATH) |
-| `git` | Yes | Direct from Git Bash |
+| Tool | Available? | Notes |
+|------|-----------|-------|
+| `gcc` | Yes | System package |
+| `x86_64-elf-gcc` / `-ld` / `-objcopy` | Yes | Cross toolchain — preferred by the Makefile when present |
+| `nasm` | Yes | |
+| `make` | Yes | |
+| `grub-mkrescue` | Yes | Needs `xorriso` + `mtools`, both present |
+| `qemu-system-x86_64` | Yes | |
+| `gdb` | Yes | For `make debug` |
+| `docker` | No | Not needed — everything builds natively |
+| `gh` (GitHub CLI) | No | Use `git` directly, or ask the user to run `gh` via `!<command>` |
+| `git` | Yes | |
 
 ## Mandatory Rules
 

@@ -1,3 +1,4 @@
+#include "../debug/debug.h"
 #include "tty.h"
 #include "vga.h"
 #include "../string.h"

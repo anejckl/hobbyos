@@ -41,5 +41,6 @@ void test_cred_suite(void);
 void test_bcache_suite(void);
 void test_swap_suite(void);
 void test_journal_suite(void);
+void test_libc_gapfill_suite(void);
 
 #endif /* TEST_MAIN_H */

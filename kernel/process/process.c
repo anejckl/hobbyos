@@ -1,9 +1,30 @@
 #include "process.h"
 #include "../memory/kheap.h"
 #include "../memory/vmm.h"
+#include "../memory/pmm.h"
 #include "../scheduler/scheduler.h"
 #include "../string.h"
 #include "../debug/debug.h"
+
+/* Free a reaped process's kernel stack allocation. The first page of
+ * kernel_stack_guard is a deliberately *unmapped* guard page (see
+ * process_create()/syscall_fork() — vmm_unmap_page() right after
+ * allocating it, to catch kernel-stack overflows). kfree() only knows
+ * about the kheap free-list bookkeeping, not paging — if we returned
+ * this block to the free list with its first page still unmapped, a
+ * later allocation could hand that same address out as ordinary
+ * memory, and whoever writes to it would fault (this is exactly what
+ * happened the first time this function was written: a page fault
+ * inside kheap territory right after the next process's stack got
+ * carved out of a freed one). Re-map the guard page with a fresh
+ * physical page first, so the entire region is genuinely usable
+ * before kfree() ever sees it. */
+static void free_kernel_stack(uint64_t kernel_stack_guard) {
+    uint64_t guard_phys = pmm_alloc_page();
+    if (guard_phys)
+        vmm_map_page(kernel_stack_guard, guard_phys, PTE_WRITABLE);
+    kfree((void *)kernel_stack_guard);
+}
 
 static struct process process_table[MAX_PROCESSES];
 static uint32_t next_pid = 1;
@@ -157,6 +178,10 @@ int process_wait_for(uint32_t child_pid, int32_t *status) {
         uint32_t zpid = zombie->pid;
         if (status)
             *status = zombie->exit_code;
+        if (zombie->kernel_stack_guard) {
+            free_kernel_stack(zombie->kernel_stack_guard);
+            zombie->kernel_stack_guard = 0;
+        }
         zombie->state = PROCESS_UNUSED;
         return (int)zpid;
     }
@@ -187,6 +212,10 @@ int process_wait_for(uint32_t child_pid, int32_t *status) {
         uint32_t zpid = zombie->pid;
         if (status)
             *status = zombie->exit_code;
+        if (zombie->kernel_stack_guard) {
+            free_kernel_stack(zombie->kernel_stack_guard);
+            zombie->kernel_stack_guard = 0;
+        }
         zombie->state = PROCESS_UNUSED;
         return (int)zpid;
     }

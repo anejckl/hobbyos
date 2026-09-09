@@ -189,9 +189,15 @@ static void check_bg_jobs(void) {
                 p->state == PROCESS_TERMINATED ||
                 p->state == PROCESS_UNUSED) {
                 vga_printf("[%u] Done  %s\n", (uint64_t)(i + 1), jobs[i].name);
-                /* Reap if zombie */
+                /* Properly reap the zombie — process_wait_for() frees its
+                 * kernel stack and releases its process-table slot back to
+                 * PROCESS_UNUSED for reuse. The previous code here only set
+                 * PROCESS_TERMINATED, which process_alloc()/process_create()
+                 * never treat as reusable — every background job permanently
+                 * leaked one process-table slot (and, separately, its kernel
+                 * stack — see the same fix in process_wait_for()). */
                 if (p && p->state == PROCESS_ZOMBIE)
-                    p->state = PROCESS_TERMINATED;
+                    process_wait_for(jobs[i].pid, NULL);
                 jobs[i].active = false;
             }
         }

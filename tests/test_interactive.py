@@ -343,9 +343,37 @@ def run_tests(native=False):
             raise RuntimeError("Boot failed — cannot run interactive tests")
 
         # Helper for interactive tests
+        def _exclude_echoed_command(text, command):
+            """Strip everything up to and including the first occurrence of
+            `command`'s own text from `text`. Used so a check_pattern that
+            happens to also appear inside the typed command itself (e.g.
+            checking for "ChainA" after typing "echo ChainA ; echo ChainB")
+            can't trivially pass from the terminal echoing what was typed —
+            it must appear in what comes *after* that echoed line, i.e.
+            genuine command output.
+
+            This is deliberately content-based, not timing-based: an
+            earlier attempt tried to solve this by re-snapshotting the
+            serial position some fixed delay after typing, but that raced
+            against the command's own execution speed — if the command
+            (and its real output) finished before the delay elapsed, the
+            re-snapshot landed *after* the real output too, and every
+            check then saw nothing at all. Stripping by content instead
+            works regardless of how fast or slow the command runs."""
+            if command and command in text:
+                idx = text.index(command)
+                return text[idx + len(command):]
+            return text
+
         def interactive_test(name, command, check_pattern, negate=False,
-                             pre_delay=0.3, post_delay=1.0, send_func=None):
-            """Run an interactive test: type command, check serial output."""
+                             pre_delay=0.3, post_delay=1.0, send_func=None,
+                             exclude_echo=False):
+            """Run an interactive test: type command, check serial output.
+
+            exclude_echo=True additionally strips the first occurrence of
+            `command`'s own echoed text before searching for check_pattern
+            (see _exclude_echoed_command) — use this whenever check_pattern
+            might also appear inside the command text being typed."""
             t = time.time()
             qemu.snapshot_serial()
             time.sleep(pre_delay)
@@ -363,12 +391,20 @@ def run_tests(native=False):
                 time.sleep(1.0)
                 full = qemu.read_serial()
                 new_output = full[qemu.serial_pos:]
-                passed = check_pattern not in new_output
+                search_space = _exclude_echoed_command(new_output, command) if exclude_echo else new_output
+                passed = check_pattern not in search_space
                 err = ("Pattern should be absent but found: " + check_pattern) if not passed else None
             else:
-                found = qemu.wait_for_pattern_in_new(check_pattern, timeout=TEST_TIMEOUT)
-                full = qemu.read_serial()
-                new_output = full[qemu.serial_pos:]
+                deadline = time.time() + TEST_TIMEOUT
+                found = False
+                while time.time() < deadline:
+                    full = qemu.read_serial()
+                    new_output = full[qemu.serial_pos:]
+                    search_space = _exclude_echoed_command(new_output, command) if exclude_echo else new_output
+                    if check_pattern in search_space:
+                        found = True
+                        break
+                    time.sleep(0.2)
                 passed = found
                 err = ("Pattern not found: " + check_pattern) if not passed else None
 
@@ -384,7 +420,8 @@ def run_tests(native=False):
             return passed
 
         # --- Test 2: echo (user program) ---
-        interactive_test("run_echo", "run echo Hello World", "Hello World")
+        interactive_test("run_echo", "run echo Hello World", "Hello World",
+                          exclude_echo=True)
 
         # --- Test 3: mkdir ---
         interactive_test("run_mkdir", "run mkdir /testdir", "ext2: mkdir")
@@ -531,6 +568,36 @@ def run_tests(native=False):
         # --- Test 30: run hello ---
         interactive_test("run_hello", "run hello", "Hello from user mode!")
 
+        # --- Test 30b: libc_test — statically-linked libc gap-fill exerciser
+        # (malloc backward-coalescing stability, FILE* round trip on ext2,
+        # deep recursion against the bumped 256KB user stack) ---
+        interactive_test("run_libc_test", "run libc_test",
+                          "libc_test: all tests passed", post_delay=2.0)
+
+        # --- Test 30c: tcc (self-hosting toolchain, Milestone 2) — runs
+        # inside QEMU without crashing and prints its real usage/help text
+        # (no compile attempted yet, that's Milestone 3) ---
+        interactive_test("run_tcc_help", "run tcc",
+                          "Tiny C Compiler", post_delay=2.0)
+
+        # --- Test 30d-g: tcc Milestone 3 — compiles a trivial syscall-only
+        # C source (tests/tcc_fixtures/hello.c, uses inline asm for raw
+        # int $0x80 syscalls, no libc/crt) into a real ELF entirely inside
+        # QEMU, then executes that compiled binary and checks its actual
+        # output — not just "the compile step exited 0". Must pass
+        # -static -nostdlib: TCC's default dynamic-link output path builds
+        # a .dynsym/.dynamic/PT_INTERP section set that has never been
+        # exercised on HobbyOS and segfaults; -static skips it entirely,
+        # matching the plan's static-only-output decision.
+        interactive_test(
+            "tcc_compile_hello",
+            "run tcc -static -nostdlib -o /tcc_tests/tccout /tcc_tests/hello.c",
+            "tcc: error", negate=True, post_delay=3.0)
+        interactive_test("tcc_enter_sh", "run sh", "$ ", post_delay=2.0)
+        interactive_test("tcc_run_compiled", "/tcc_tests/tccout",
+                          "tcc works!", post_delay=2.0)
+        interactive_test("tcc_exit_sh", "exit", "hobbyos>", post_delay=1.5)
+
         # --- Test 31: ping QEMU DNS server (10.0.2.3, internal to SLIRP) ---
         # Note: external IPs like 8.8.8.8 fail in CI (no outbound ICMP allowed)
         interactive_test("ping_dns", "ping 10.0.2.3", "Reply from", post_delay=5.0)
@@ -541,8 +608,8 @@ def run_tests(native=False):
         interactive_test("sh_enter", "run sh", "$ ", post_delay=2.0)
 
         # --- Test 33: sh pipe basic (echo | grep) ---
-        interactive_test("sh_pipe_grep", "echo TestPipe | grep TestPipe",
-                         "TestPipe", post_delay=3.0)
+        interactive_test("sh_pipe_grep", "echo TestPipe | grep TestPipe", "TestPipe",
+                          post_delay=3.0, exclude_echo=True)
 
         # --- Test 34: sh redirect out ---
         # Write to file, then cat it
@@ -551,6 +618,11 @@ def run_tests(native=False):
         time.sleep(0.3)
         qemu.type_line("echo RedirTest > /redir.txt")
         time.sleep(3.0)
+        # Re-snapshot so the check below only sees cat's actual output, not
+        # the echoed "echo RedirTest..." command line (which itself contains
+        # the literal text "RedirTest" and would otherwise false-positive
+        # even if the redirect/cat round trip never actually worked).
+        qemu.snapshot_serial()
         qemu.type_line("cat /redir.txt")
         time.sleep(3.0)
         found = qemu.wait_for_pattern_in_new("RedirTest", timeout=TEST_TIMEOUT)
@@ -573,6 +645,10 @@ def run_tests(native=False):
         time.sleep(3.0)
         qemu.type_line("echo Line2 >> /app.txt")
         time.sleep(3.0)
+        # Re-snapshot so the check below only sees cat's actual output, not
+        # the two echoed "echo Line1.../echo Line2..." command lines (which
+        # themselves contain the literal text being checked for).
+        qemu.snapshot_serial()
         qemu.type_line("cat /app.txt")
         time.sleep(3.0)
         full = qemu.read_serial()
@@ -588,12 +664,12 @@ def run_tests(native=False):
         qemu.serial_pos = len(qemu.read_serial())
 
         # --- Test 36: sh semicolon chaining ---
-        interactive_test("sh_chain_semi", "echo ChainA ; echo ChainB",
-                         "ChainA", post_delay=3.0)
+        interactive_test("sh_chain_semi", "echo ChainA ; echo ChainB", "ChainA",
+                          post_delay=3.0, exclude_echo=True)
 
         # --- Test 37: sh && chaining ---
-        interactive_test("sh_chain_and", "echo AndA && echo AndB",
-                         "AndB", post_delay=3.0)
+        interactive_test("sh_chain_and", "echo AndA && echo AndB", "AndB",
+                          post_delay=3.0, exclude_echo=True)
 
         # --- Test 38: Exit user shell ---
         interactive_test("sh_exit", "exit", "exit with status 0", post_delay=3.0)

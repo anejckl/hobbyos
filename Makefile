@@ -8,23 +8,23 @@ AS = nasm
 
 CFLAGS = -ffreestanding -mno-red-zone -mcmodel=kernel -Wall -Wextra \
          -fno-stack-protector -fstack-clash-protection -fno-pic -nostdlib -nostdinc -Ikernel -O2 -g \
-         -mno-sse -mno-sse2 -mno-mmx -mno-avx -MMD -MP
+         -std=c11 -mno-sse -mno-sse2 -mno-mmx -mno-avx -MMD -MP
 ASFLAGS = -f elf64 -g
 LDFLAGS = -T linker.ld -nostdlib -z max-page-size=0x1000
 
 # User program build flags (no -mcmodel=kernel, user code runs at 0x400000)
 USER_CFLAGS = -ffreestanding -mno-red-zone -Wall -Wextra \
               -fno-stack-protector -fno-pic -nostdlib -nostdinc -Iuser -O2 -g \
-              -mno-sse -mno-sse2 -mno-mmx -mno-avx
+              -std=c11 -mno-sse -mno-sse2 -mno-mmx -mno-avx
 
 # Shared object flags (PIC, freestanding, no libc)
 SO_CFLAGS = -fPIC -ffreestanding -mno-red-zone -Wall -Wextra \
             -fno-stack-protector -nostdlib -nostdinc -Iuser -O2 -g \
-            -mno-sse -mno-sse2 -mno-mmx -mno-avx
+            -std=c11 -mno-sse -mno-sse2 -mno-mmx -mno-avx
 
 # libc shared library sources
 LIBC_SRCS = user/lib/libc.c user/lib/malloc.c user/lib/stdio.c \
-            user/lib/string.c user/lib/stdlib.c
+            user/lib/string.c user/lib/stdlib.c user/lib/stdio_file.c
 
 # Source files
 ASM_SRCS = boot/boot.asm \
@@ -105,7 +105,7 @@ C_OBJS = $(C_SRCS:.c=.o)
 C_DEPS = $(C_OBJS:.o=.d)
 
 # User program embedded objects
-USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm net_test nc httpd ping exec_test waitpid_test argv_test fork_exec_test mmap_test epoll_test cp mv df grep head tail top kill ifconfig netstat sh cat sh_test id whoami demand_test perm_test nonblock_test wm
+USER_PROGRAMS = hello counter fork_test cow_test multifork_test pipe_test signal_test procfs_test echo ls ps mkdir touch rm net_test nc httpd ping exec_test waitpid_test argv_test fork_exec_test mmap_test epoll_test cp mv df grep head tail top kill ifconfig netstat sh cat sh_test id whoami demand_test perm_test nonblock_test wm libc_test tcc
 USER_EMBED_OBJS = $(patsubst %,user/%_embed.o,$(USER_PROGRAMS))
 
 OBJS = $(ASM_OBJS) $(C_OBJS) $(USER_EMBED_OBJS)
@@ -140,6 +140,41 @@ user/%.elf: user/%.o user/user.ld
 user/%_embed.o: user/%.elf
 	cd user && $(OBJCOPY) -I binary -O elf64-x86-64 -B i386:x86-64 $*.elf $*_embed.o
 
+# libc_test: statically links the extended user/lib/*.c sources directly into
+# the same flat ET_EXEC (no libc.so/ld.so involved) — this is the same static
+# linking pattern planned for the TCC binary itself; libc_test proves it works
+# end-to-end at small scale first.
+LIBC_TEST_LIB_OBJS = $(patsubst %.c,%.o,$(LIBC_SRCS))
+LIBC_TEST_OBJS = user/libc_test.o $(LIBC_TEST_LIB_OBJS)
+
+user/libc_test.elf: $(LIBC_TEST_OBJS) user/user.ld
+	$(LD) -T user/user.ld -nostdlib -o $@ $(LIBC_TEST_OBJS)
+
+# --- TCC (self-hosting toolchain, Milestone 1) ---
+# TCC's own ONE_SOURCE=1 default (its usual native-build mode) means tcc.c
+# alone pulls in libtcc.c/tccpp.c/tccgen.c/tccelf.c/x86_64-gen.c/
+# x86_64-link.c/i386-asm.c/tccasm.c/tcctools.c via nested #include — those
+# files are NOT compiled as separate translation units. Statically linked,
+# same house style as every other HobbyOS user program (no libc.so/ld.so).
+TCC_CFLAGS = -ffreestanding -mno-red-zone -Wall -fno-stack-protector -fno-pic \
+             -nostdlib -nostdinc -Iuser/tcc/compat -Iuser/tcc -Iuser -O2 -g \
+             -std=gnu11 -mno-sse -mno-sse2 -mno-mmx -mno-avx -DTCC_TARGET_X86_64
+
+user/tcc/tcc.o: user/tcc/tcc.c user/tcc/*.h
+	$(CC) $(TCC_CFLAGS) -c $< -o $@
+
+user/tcc/crt0.o: user/tcc/crt0.c
+	$(CC) $(TCC_CFLAGS) -c $< -o $@
+
+user/tcc/hobbyos_compat.o: user/tcc/hobbyos_compat.c
+	$(CC) $(TCC_CFLAGS) -c $< -o $@
+
+TCC_LIB_OBJS = $(patsubst %.c,%.o,$(LIBC_SRCS))
+TCC_OBJS = user/tcc/crt0.o user/tcc/tcc.o user/tcc/hobbyos_compat.o $(TCC_LIB_OBJS)
+
+user/tcc.elf: $(TCC_OBJS) user/user.ld
+	$(LD) -T user/user.ld -nostdlib -o $@ $(TCC_OBJS)
+
 # --- Shared object build rules ---
 
 # ld.so: user-space dynamic linker (ET_DYN, base 0)
@@ -162,20 +197,24 @@ iso: $(KERNEL_BIN)
 	grub-mkrescue -o $(ISO) $(ISO_DIR)
 
 # ext2 disk image with user programs + shared libraries
+# Populated via debugfs (not `mount -o loop`) so this works without root.
 disk.img: $(patsubst %,user/%.elf,$(USER_PROGRAMS)) user/ld.so user/lib/libc.so
-	dd if=/dev/zero of=disk.img bs=1M count=16
-	mkfs.ext2 -F disk.img
-	mkdir -p /tmp/hobbyos_mnt
-	mount -o loop disk.img /tmp/hobbyos_mnt || true
-	mkdir -p /tmp/hobbyos_mnt/bin || true
-	mkdir -p /tmp/hobbyos_mnt/lib || true
-	for prog in $(USER_PROGRAMS); do \
-		cp user/$$prog.elf /tmp/hobbyos_mnt/bin/$$prog 2>/dev/null || true; \
+	dd if=/dev/zero of=disk.img bs=1M count=64
+	mkfs.ext2 -F -b 4096 disk.img
+	@rm -f /tmp/hobbyos_disk_debugfs.script
+	@echo "mkdir /bin" >> /tmp/hobbyos_disk_debugfs.script
+	@echo "mkdir /lib" >> /tmp/hobbyos_disk_debugfs.script
+	@echo "mkdir /tcc_tests" >> /tmp/hobbyos_disk_debugfs.script
+	@echo "write tests/tcc_fixtures/hello.c /tcc_tests/hello.c" >> /tmp/hobbyos_disk_debugfs.script
+	@for prog in $(USER_PROGRAMS); do \
+		if [ -f user/$$prog.elf ]; then \
+			echo "write user/$$prog.elf /bin/$$prog" >> /tmp/hobbyos_disk_debugfs.script; \
+		fi; \
 	done
-	cp user/ld.so     /tmp/hobbyos_mnt/lib/ld.so     2>/dev/null || true
-	cp user/lib/libc.so /tmp/hobbyos_mnt/lib/libc.so 2>/dev/null || true
-	umount /tmp/hobbyos_mnt 2>/dev/null || true
-	rm -rf /tmp/hobbyos_mnt
+	@echo "write user/ld.so /lib/ld.so" >> /tmp/hobbyos_disk_debugfs.script
+	@echo "write user/lib/libc.so /lib/libc.so" >> /tmp/hobbyos_disk_debugfs.script
+	debugfs -w -f /tmp/hobbyos_disk_debugfs.script disk.img
+	@rm -f /tmp/hobbyos_disk_debugfs.script
 
 # QEMU flags for disk support
 QEMU_DISK_FLAGS = $(if $(wildcard disk.img),-drive file=disk.img$(comma)format=raw$(comma)if=ide,)
@@ -196,7 +235,7 @@ debug: iso
 
 # Host-side unit tests (fast, no QEMU needed)
 test-host:
-	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_refcount.c tests/test_printf.c tests/test_elf.c tests/test_vfs.c tests/test_pipe.c tests/test_signal.c tests/test_netbuf.c tests/test_checksum.c tests/test_device.c tests/test_cred.c tests/test_bcache.c tests/test_swap.c tests/test_journal.c -Itests -Wall -Wextra
+	gcc -fno-builtin -o tests/run_tests tests/test_main.c tests/test_string.c tests/test_pmm.c tests/test_refcount.c tests/test_printf.c tests/test_elf.c tests/test_vfs.c tests/test_pipe.c tests/test_signal.c tests/test_netbuf.c tests/test_checksum.c tests/test_device.c tests/test_cred.c tests/test_bcache.c tests/test_swap.c tests/test_journal.c tests/test_libc_gapfill.c -Itests -Wall -Wextra
 	./tests/run_tests
 
 # QEMU smoke test (boots kernel, checks serial output)
@@ -205,9 +244,9 @@ test-qemu: iso
 
 # Interactive QEMU tests (sends keystrokes, checks serial output)
 test-interactive: iso
-	@echo "Creating fresh ext2 disk image..."
-	dd if=/dev/zero of=disk.img bs=1M count=16 2>/dev/null
-	mkfs.ext2 -F disk.img >/dev/null 2>&1
+	@echo "Creating fresh, fully-populated ext2 disk image..."
+	@rm -f disk.img
+	$(MAKE) disk.img
 	python3 tests/test_interactive.py
 
 # Native QEMU interactive tests (Windows host, TCP serial, catches QEMU-version-specific bugs)
@@ -217,8 +256,8 @@ test-native:
 	@echo "Using native Windows QEMU with TCP serial..."
 	@test -f hobbyos.iso || (echo "ERROR: hobbyos.iso not found. Build with Docker first." && exit 1)
 	@echo "Creating fresh ext2 disk image via Docker..."
-	@dd if=/dev/zero of=disk.img bs=1M count=16 2>/dev/null
-	@MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test mkfs.ext2 -F disk.img >/dev/null 2>&1
+	@dd if=/dev/zero of=disk.img bs=1M count=64 2>/dev/null
+	@MSYS_NO_PATHCONV=1 docker run --rm -v "C:/Users/Uporabnik/Documents/hobbyos:/hobbyos" hobbyos-test mkfs.ext2 -F -b 4096 disk.img >/dev/null 2>&1
 	python3 tests/test_interactive.py --native
 
 # Run all tests
@@ -234,6 +273,7 @@ clean:
 	rm -f $(OBJS) $(C_DEPS) $(KERNEL_BIN) $(ISO) tests/run_tests tests/serial_output.log tests/interactive_serial.log tests/interactive_results.json
 	rm -f user/*.o user/*.elf user/*.bin user/*.so
 	rm -f user/lib/*.o user/lib/*.so
+	rm -f user/tcc/*.o
 	rm -f kernel/elf/*.o kernel/fs/*.o kernel/signal/*.o kernel/drivers/*.o kernel/net/*.o kernel/security/*.o
 	find . -name '*.d' -delete 2>/dev/null || true
 	rm -rf $(ISO_DIR)

@@ -79,3 +79,52 @@ char *strrchr(const char *s, int c) {
     if (c == '\0') return (char *)s;
     return (char *)last;
 }
+
+void *memmove(void *dst, const void *src, size_t n) {
+    char *d = (char *)dst;
+    const char *s = (const char *)src;
+    if (d == s || n == 0) return dst;
+    if (d < s) {
+        while (n--) *d++ = *s++;
+    } else {
+        d += n;
+        s += n;
+        while (n--) *--d = *--s;
+    }
+    return dst;
+}
+
+int memcmp(const void *a, const void *b, size_t n) {
+    const unsigned char *pa = (const unsigned char *)a;
+    const unsigned char *pb = (const unsigned char *)b;
+    while (n--) {
+        if (*pa != *pb) return (int)*pa - (int)*pb;
+        pa++;
+        pb++;
+    }
+    return 0;
+}
+
+char *strcat(char *dst, const char *src) {
+    char *d = dst;
+    while (*d) d++;
+    while ((*d++ = *src++));
+    return dst;
+}
+
+char *strncat(char *dst, const char *src, size_t n) {
+    char *d = dst;
+    while (*d) d++;
+    size_t i = 0;
+    for (; i < n && src[i]; i++) d[i] = src[i];
+    d[i] = '\0';
+    return dst;
+}
+
+char *strdup(const char *s) {
+    size_t len = strlen(s) + 1;
+    char *copy = (char *)malloc(len);
+    if (!copy) return NULL;
+    memcpy(copy, s, len);
+    return copy;
+}

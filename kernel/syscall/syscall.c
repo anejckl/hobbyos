@@ -138,13 +138,19 @@ static void syscall_exec(struct interrupt_frame *frame, uint64_t arg1) {
 
     if (ext2_is_mounted()) {
         char ext2_path[64];
-        ext2_path[0] = '/';
-        ext2_path[1] = 'b';
-        ext2_path[2] = 'i';
-        ext2_path[3] = 'n';
-        ext2_path[4] = '/';
-        strncpy(ext2_path + 5, name_buf, sizeof(ext2_path) - 6);
-        ext2_path[sizeof(ext2_path) - 1] = '\0';
+        if (name_buf[0] == '/') {
+            /* Already an absolute path — use as-is, don't double-prefix. */
+            strncpy(ext2_path, name_buf, sizeof(ext2_path) - 1);
+            ext2_path[sizeof(ext2_path) - 1] = '\0';
+        } else {
+            ext2_path[0] = '/';
+            ext2_path[1] = 'b';
+            ext2_path[2] = 'i';
+            ext2_path[3] = 'n';
+            ext2_path[4] = '/';
+            strncpy(ext2_path + 5, name_buf, sizeof(ext2_path) - 6);
+            ext2_path[sizeof(ext2_path) - 1] = '\0';
+        }
 
         uint32_t ino = ext2_path_lookup(ext2_path);
         if (ino) {
@@ -361,10 +367,23 @@ static void syscall_execv(struct interrupt_frame *frame,
 
     if (ext2_is_mounted()) {
         char ext2_path[72];
-        ext2_path[0] = '/'; ext2_path[1] = 'b'; ext2_path[2] = 'i';
-        ext2_path[3] = 'n'; ext2_path[4] = '/';
-        strncpy(ext2_path + 5, name_buf, sizeof(ext2_path) - 6);
-        ext2_path[sizeof(ext2_path) - 1] = '\0';
+        if (name_buf[0] == '/') {
+            /* Already an absolute path (e.g. from sh.c's resolve_path, which
+             * always resolves bare commands to "/bin/<name>" before calling
+             * execv) — use as-is. Previously this branch didn't exist and
+             * every absolute path got "/bin/" prepended a second time
+             * (producing e.g. "/bin//bin/echo", which never resolves) —
+             * every execv from the user shell was silently falling back to
+             * the RAMFS-only basename lookup below instead of ever actually
+             * using ext2. */
+            strncpy(ext2_path, name_buf, sizeof(ext2_path) - 1);
+            ext2_path[sizeof(ext2_path) - 1] = '\0';
+        } else {
+            ext2_path[0] = '/'; ext2_path[1] = 'b'; ext2_path[2] = 'i';
+            ext2_path[3] = 'n'; ext2_path[4] = '/';
+            strncpy(ext2_path + 5, name_buf, sizeof(ext2_path) - 6);
+            ext2_path[sizeof(ext2_path) - 1] = '\0';
+        }
 
         uint32_t ino = ext2_path_lookup(ext2_path);
         if (ino) {
@@ -1071,9 +1090,14 @@ static void syscall_handler(struct interrupt_frame *frame) {
         return;
 
     case SYS_WAIT: {
-        /* sys_wait(int32_t *status) → returns child PID or -1 */
+        /* sys_wait(int32_t *status) → returns child PID or -1
+         *
+         * Delegates to process_wait_for() (child_pid=0 means "any child")
+         * instead of duplicating its reap logic inline — this used to be
+         * a separate, independently-maintained copy that (like the
+         * SYS_WAITPID copy below) never freed the reaped child's kernel
+         * stack, permanently leaking ~20KB of kheap per process. */
         int32_t *status_ptr = (int32_t *)arg1;
-        struct process *cur = scheduler_get_current();
 
         /* Validate pointer if non-NULL */
         if (status_ptr && (uint64_t)status_ptr >= KERNEL_VMA) {
@@ -1081,43 +1105,7 @@ static void syscall_handler(struct interrupt_frame *frame) {
             return;
         }
 
-        /* Check for zombie child first */
-        struct process *zombie = process_find_zombie_child(cur->pid);
-        if (zombie) {
-            uint32_t zpid = zombie->pid;
-            if (status_ptr)
-                *status_ptr = zombie->exit_code;
-            zombie->state = PROCESS_UNUSED;
-            frame->rax = (uint64_t)zpid;
-            return;
-        }
-
-        /* No zombie — do we have any living children? */
-        if (!process_has_children(cur->pid)) {
-            frame->rax = (uint64_t)-1;
-            return;
-        }
-
-        /* Block until a child exits */
-        cur->wait_for_pid = 0;  /* wait for any child */
-        cur->state = PROCESS_BLOCKED;
-        schedule();
-
-        /* Re-enable interrupts after being rescheduled from PIT ISR */
-        sti();
-
-        /* Resumed — find and reap the zombie child */
-        zombie = process_find_zombie_child(cur->pid);
-        if (zombie) {
-            uint32_t zpid = zombie->pid;
-            if (status_ptr)
-                *status_ptr = zombie->exit_code;
-            zombie->state = PROCESS_UNUSED;
-            frame->rax = (uint64_t)zpid;
-            return;
-        }
-
-        frame->rax = (uint64_t)-1;
+        frame->rax = (uint64_t)process_wait_for(0, status_ptr);
         return;
     }
 
@@ -1984,7 +1972,16 @@ static void syscall_handler(struct interrupt_frame *frame) {
     }
 
     case SYS_WAITPID: {
-        /* sys_waitpid(pid, status_ptr, options) */
+        /* sys_waitpid(pid, status_ptr, options)
+         *
+         * Delegates the actual reap to process_wait_for() instead of
+         * duplicating its logic inline (four separate times, in the
+         * original version of this case) — that duplicate never freed
+         * the reaped child's kernel stack, permanently leaking ~20KB of
+         * kheap per process. Every user-shell command (sh.c calls
+         * sys_waitpid with a specific PID, not sys_wait) went through
+         * this exact leak, and it's what eventually exhausted the 4MB
+         * kernel heap during any sufficiently long-running session. */
         int32_t wait_pid = (int32_t)arg1;
         int32_t *status_ptr = (int32_t *)arg2;
         /* arg3 = options, reserved for future use */
@@ -1998,76 +1995,21 @@ static void syscall_handler(struct interrupt_frame *frame) {
         }
 
         if (wait_pid > 0) {
-            /* Wait for specific child */
+            /* Reject up front if the target isn't actually our child —
+             * process_wait_for() has no such check and would otherwise
+             * block indefinitely waiting for a PID that can never
+             * become our zombie. */
             struct process *child = process_get_by_pid((uint32_t)wait_pid);
             if (!child || child->ppid != cur->pid) {
                 frame->rax = (uint64_t)-1;
                 return;
             }
-
-            if (child->state == PROCESS_ZOMBIE) {
-                if (status_ptr)
-                    *status_ptr = child->exit_code;
-                uint32_t zpid = child->pid;
-                child->state = PROCESS_UNUSED;
-                frame->rax = (uint64_t)zpid;
-                return;
-            }
-
-            /* Block until this specific child exits */
-            cur->wait_for_pid = (uint32_t)wait_pid;
-            cur->state = PROCESS_BLOCKED;
-            schedule();
-            sti();
-
-            /* Resumed — check again */
-            child = process_get_by_pid((uint32_t)wait_pid);
-            if (child && child->ppid == cur->pid &&
-                child->state == PROCESS_ZOMBIE) {
-                if (status_ptr)
-                    *status_ptr = child->exit_code;
-                uint32_t zpid = child->pid;
-                child->state = PROCESS_UNUSED;
-                frame->rax = (uint64_t)zpid;
-                return;
-            }
-
-            frame->rax = (uint64_t)-1;
+            frame->rax = (uint64_t)process_wait_for((uint32_t)wait_pid, status_ptr);
             return;
         }
 
         /* wait_pid <= 0: wait for any child (same as SYS_WAIT) */
-        struct process *zombie = process_find_zombie_child(cur->pid);
-        if (zombie) {
-            uint32_t zpid = zombie->pid;
-            if (status_ptr)
-                *status_ptr = zombie->exit_code;
-            zombie->state = PROCESS_UNUSED;
-            frame->rax = (uint64_t)zpid;
-            return;
-        }
-
-        if (!process_has_children(cur->pid)) {
-            frame->rax = (uint64_t)-1;
-            return;
-        }
-
-        cur->wait_for_pid = 0;
-        cur->state = PROCESS_BLOCKED;
-        schedule();
-        sti();
-
-        zombie = process_find_zombie_child(cur->pid);
-        if (zombie) {
-            uint32_t zpid = zombie->pid;
-            if (status_ptr)
-                *status_ptr = zombie->exit_code;
-            zombie->state = PROCESS_UNUSED;
-            frame->rax = (uint64_t)zpid;
-            return;
-        }
-
-        frame->rax = (uint64_t)-1;
+        frame->rax = (uint64_t)process_wait_for(0, status_ptr);
         return;
     }
 

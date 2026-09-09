@@ -36,6 +36,11 @@ char *strstr(const char *haystack, const char *needle);
 char *strchr(const char *s, int c);
 char *strrchr(const char *s, int c);
 size_t strnlen(const char *s, size_t maxlen);
+void *memmove(void *dst, const void *src, size_t n);
+int memcmp(const void *a, const void *b, size_t n);
+char *strcat(char *dst, const char *src);
+char *strncat(char *dst, const char *src, size_t n);
+char *strdup(const char *s);
 
 /* stdlib */
 int atoi(const char *s);
@@ -44,6 +49,11 @@ void exit(int status);
 void abort(void);
 char *itoa(int value, char *buf, int base);
 char *utoa(uint64_t value, char *buf, int base);
+long strtol(const char *s, char **endptr, int base);
+unsigned long strtoul(const char *s, char **endptr, int base);
+void qsort(void *base, size_t nmemb, size_t size,
+           int (*compar)(const void *, const void *));
+char *getenv(const char *name);
 
 /* malloc */
 void *malloc(size_t size);
@@ -77,6 +87,15 @@ void *sys_mmap_libc(void *addr, size_t len, uint32_t prot,
                      uint32_t flags, int32_t fd, uint64_t offset);
 int64_t sys_munmap_libc(void *addr, size_t len);
 
+/* stat structure */
+struct stat_buf {
+    uint32_t type;      /* STAT_FILE or STAT_DIR */
+    uint32_t size;
+    uint32_t inode;
+};
+#define STAT_FILE  1
+#define STAT_DIR   2
+
 /* New syscall wrappers */
 int64_t sys_lseek_libc(int fd, int64_t offset, int whence);
 int64_t sys_stat_libc(const char *path, struct stat_buf *sb);
@@ -92,13 +111,28 @@ int64_t sys_rename_libc(const char *old_path, const char *new_path);
 int64_t sys_mkdir_libc(const char *path);
 int64_t sys_unlink_libc(const char *path);
 
-/* stat structure */
-struct stat_buf {
-    uint32_t type;      /* STAT_FILE or STAT_DIR */
-    uint32_t size;
-    uint32_t inode;
-};
-#define STAT_FILE  1
-#define STAT_DIR   2
+/* open() flags (mirrors user/syscall.h — libc.h and syscall.h are used by
+ * disjoint programs, so duplicating these here is safe) */
+#define O_RDONLY   0x00
+#define O_WRONLY   0x01
+#define O_RDWR     0x02
+#define O_CREAT    0x40
+#define O_TRUNC    0x200
+#define O_APPEND   0x400
+
+/* FILE* stdio layer */
+typedef struct FILE FILE;
+extern FILE *stdin;
+extern FILE *stdout;
+extern FILE *stderr;
+
+FILE *fopen(const char *path, const char *mode);
+FILE *fdopen(int fd, const char *mode);
+int fclose(FILE *f);
+size_t fread(void *ptr, size_t size, size_t nmemb, FILE *f);
+size_t fwrite(const void *ptr, size_t size, size_t nmemb, FILE *f);
+int fseek(FILE *f, int64_t offset, int whence);
+int64_t ftell(FILE *f);
+int feof(FILE *f);
 
 #endif /* LIBC_H */

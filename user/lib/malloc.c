@@ -5,6 +5,7 @@ struct malloc_block {
     size_t size;            /* payload size (excluding header) */
     int    free;            /* 1 = free, 0 = allocated */
     struct malloc_block *next;
+    struct malloc_block *prev;
 };
 
 #define HEADER_SIZE  (sizeof(struct malloc_block))
@@ -43,6 +44,8 @@ void *malloc(size_t size) {
                 rest->size = b->size - size - HEADER_SIZE;
                 rest->free = 1;
                 rest->next = b->next;
+                rest->prev = b;
+                if (rest->next) rest->next->prev = rest;
                 b->next = rest;
                 b->size = size;
             }
@@ -58,6 +61,7 @@ void *malloc(size_t size) {
     nb->size = size;
     nb->free = 0;
     nb->next = NULL;
+    nb->prev = NULL;
 
     if (!heap_head) {
         heap_head = nb;
@@ -66,6 +70,7 @@ void *malloc(size_t size) {
         b = heap_head;
         while (b->next) b = b->next;
         b->next = nb;
+        nb->prev = b;
     }
     return (char *)nb + HEADER_SIZE;
 }
@@ -78,8 +83,19 @@ void free(void *ptr) {
 
     /* Coalesce with next */
     while (b->next && b->next->free) {
-        b->size += HEADER_SIZE + b->next->size;
-        b->next = b->next->next;
+        struct malloc_block *n = b->next;
+        b->size += HEADER_SIZE + n->size;
+        b->next = n->next;
+        if (b->next) b->next->prev = b;
+    }
+
+    /* Coalesce with prev */
+    while (b->prev && b->prev->free) {
+        struct malloc_block *p = b->prev;
+        p->size += HEADER_SIZE + b->size;
+        p->next = b->next;
+        if (p->next) p->next->prev = p;
+        b = p;
     }
 }
 
