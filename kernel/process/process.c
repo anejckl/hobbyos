@@ -20,15 +20,19 @@
  * physical page first, so the entire region is genuinely usable
  * before kfree() ever sees it. */
 /* Kernel stacks are always the same fixed size (one guard page plus
- * PROCESS_STACK_SIZE) and get freed constantly as processes are reaped —
- * but kfree() is a no-op (bump allocator, kernel/memory/kheap.c), so
- * every process that has ever existed would otherwise permanently
- * consume ~20KB of the 4MB kheap for the rest of the session. A small
- * free list just for this one fixed allocation size sidesteps that
- * without touching the general allocator: a reaped stack goes back
- * here instead of to kfree(), and future stack allocations check here
- * first. Capped at MAX_PROCESSES since that's the most that could ever
- * be outstanding at once. */
+ * PROCESS_STACK_SIZE) and get freed constantly as processes are reaped.
+ * kernel/memory/kheap.c is a real first-fit free-list allocator with
+ * forward+backward coalescing — kfree() genuinely reclaims memory, not
+ * a bump allocator as this comment previously (incorrectly) claimed.
+ * The real bug this free list originally worked around (see commit
+ * 5815234, and its corrected write-up in kheap.c/test_kheap.c) was a
+ * kmalloc_page_aligned() algorithm gap that could reject an otherwise
+ * huge, perfectly usable free block over alignment bad luck alone —
+ * fixed directly in kheap.c now, so this free list is kept purely as
+ * an optimization (skips a free-list walk + alignment arithmetic on
+ * every fork()/reap, the hottest allocation in the kernel) rather than
+ * a correctness requirement. Capped at MAX_PROCESSES since that's the
+ * most that could ever be outstanding at once. */
 #define KSTACK_ALLOC_SIZE (PAGE_SIZE + PROCESS_STACK_SIZE)
 static void *kstack_free_list[MAX_PROCESSES];
 static int kstack_free_count = 0;
@@ -46,7 +50,8 @@ static void free_kernel_stack(uint64_t kernel_stack_guard) {
     if (kstack_free_count < MAX_PROCESSES)
         kstack_free_list[kstack_free_count++] = (void *)kernel_stack_guard;
     /* else: shouldn't happen (list is sized to MAX_PROCESSES outstanding
-     * stacks), but fall back to the no-op kfree() rather than overflow. */
+     * stacks), but fall back to kfree() (a real, working reclaim — see
+     * kheap.c) rather than overflow. */
     else
         kfree((void *)kernel_stack_guard);
 }

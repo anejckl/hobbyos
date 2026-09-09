@@ -127,6 +127,26 @@ void *kmalloc_page_aligned(size_t size) {
         uint64_t aligned = (data_start + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
         uint64_t waste = aligned - data_start;
 
+        /* A nonzero waste needs to become its own free block (header at
+         * 'aligned - BLOCK_HDR_SIZE'), which needs at least
+         * BLOCK_HDR_SIZE + MIN_BLOCK_SIZE bytes to be valid. If waste
+         * falls short of that (1..BLOCK_HDR_SIZE+MIN_BLOCK_SIZE-1 bytes
+         * — common, since it depends only on this block's start address
+         * modulo PAGE_SIZE, nothing about its size), neither branch below
+         * used to handle it and this block was rejected outright — even
+         * when it was the only free block in the entire heap and orders
+         * of magnitude bigger than needed. Bumping to the next page
+         * boundary instead makes the new waste at least PAGE_SIZE, which
+         * is always comfortably >= BLOCK_HDR_SIZE + MIN_BLOCK_SIZE, so it
+         * always qualifies for the existing large-waste split below
+         * (still subject to the same "is the block big enough" check —
+         * this just stops rejecting otherwise-perfectly-good blocks on
+         * alignment bad luck alone). */
+        if (waste != 0 && waste < BLOCK_HDR_SIZE + MIN_BLOCK_SIZE) {
+            aligned += PAGE_SIZE;
+            waste = aligned - data_start;
+        }
+
         /* We need: waste bytes padding + size bytes for user data
          * The block must be able to hold a header at 'aligned - BLOCK_HDR_SIZE' */
         if (waste == 0 && cur->size >= size) {

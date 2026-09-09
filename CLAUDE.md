@@ -116,7 +116,6 @@ qemu-system-x86_64 -cdrom hobbyos.iso -serial stdio -m 128M -no-reboot -no-shutd
 | Remove `-mcmodel=kernel` | Kernel is at `0xFFFFFFFF80000000`; default model can't address it | Flag is mandatory — never touch it |
 | Remove `-ffreestanding -nostdlib -nostdinc` | There is no libc to link against | Flags are mandatory — never touch them |
 | Remove `-fno-stack-protector` | No `__stack_chk_fail` symbol available | Flag is mandatory — never touch it |
-| Call `kfree()` and expect memory back | Bump allocator — `kfree` is a no-op | Allocate carefully; memory is not reclaimed |
 | Change ISR stub push order without updating C struct | `isr_stubs.asm` and `struct interrupt_frame` must match exactly | Always change both together |
 | Disable PIT (IRQ 0) | Timer drives `scheduler_tick()` — scheduling stops entirely | Leave PIT enabled |
 | Use `printf` / `malloc` / `exit` in kernel code | These are libc functions — they don't exist | Use `vga_printf`, `kmalloc`, `kpanic` |
@@ -501,44 +500,46 @@ Then:
 
 3. **Never dereference raw physical addresses.** Always use `PHYS_TO_VIRT()` or `KERNEL_PHYS_TO_VIRT()`.
 
-4. **`kfree()` is a no-op.** The bump allocator cannot reclaim memory.
+4. **`kernel/memory/kheap.c` is a real first-fit free-list allocator, not a bump allocator.** `kfree()` genuinely reclaims memory, with both forward and backward coalescing (`kheap.c:225-241`). This corrects a long-standing wrong claim in this file, which in turn led a past debugging session to misdiagnose a real bug (see next gotcha) — verify this kind of claim against the actual source before relying on it. Page-aligned allocations (`kmalloc_page_aligned`, used only for kernel stacks) go through separate logic from plain `kmalloc`/`kfree` and are worth extra scrutiny if touched (see next gotcha).
 
-5. **Context switch only saves callee-saved registers** (r12-r15, rbx, rbp). Caller-saved regs are on the ISR stack frame.
+5. **`kmalloc_page_aligned()` had a real algorithm bug (fixed): a candidate block's alignment "waste" (padding before the next page boundary) was only handled when exactly 0 or `>= BLOCK_HDR_SIZE + MIN_BLOCK_SIZE` (40) bytes — 1..39 bytes of waste (which depends only on a block's address modulo `PAGE_SIZE`, nothing about its size) fell through neither branch and rejected the block outright, even as the *only* free block in the entire heap and vastly bigger than needed.** Reproduced in `tests/test_kheap.c` with a single ~4MB free block still failing a 20KB page-aligned request. This — not "kfree is a no-op" — was the real mechanism behind the kernel-stack-exhaustion CI bug fixed in `kernel/process/process.c` (commit `5815234`); that fix (a dedicated free list for kernel stacks) is still kept as a performance optimization, not because it's still needed for correctness.
 
-6. **Disabling PIT stops scheduling entirely.** Timer IRQ drives `scheduler_tick()`.
+6. **Context switch only saves callee-saved registers** (r12-r15, rbx, rbp). Caller-saved regs are on the ISR stack frame.
 
-7. **`keyboard_getchar()` is blocking** — it halts until a keypress interrupt. The ring buffer is fed by two IRQs: PS/2 on IRQ 1 *and* COM1 serial RX on IRQ 4, so headless/remote deployments (ttyd wrapping QEMU, virtio-serial, etc.) work without a PS/2 controller at all.
+7. **Disabling PIT stops scheduling entirely.** Timer IRQ drives `scheduler_tick()`.
 
-8. **Boot page tables use 2 MB huge pages.** VMM adds 4 KB pages on top but doesn't replace them.
+8. **`keyboard_getchar()` is blocking** — it halts until a keypress interrupt. The ring buffer is fed by two IRQs: PS/2 on IRQ 1 *and* COM1 serial RX on IRQ 4, so headless/remote deployments (ttyd wrapping QEMU, virtio-serial, etc.) work without a PS/2 controller at all.
 
-9. **All `debug_printf` args are 64-bit.** `%d` expects `int64_t`, `%u`/`%x` expect `uint64_t`. Cast smaller types: `(uint64_t)my_int`.
+9. **Boot page tables use 2 MB huge pages.** VMM adds 4 KB pages on top but doesn't replace them.
 
-10. **`strtok` is not reentrant.** It uses a static `strtok_state` variable. Don't call from interrupt handlers.
+10. **All `debug_printf` args are 64-bit.** `%d` expects `int64_t`, `%u`/`%x` expect `uint64_t`. Cast smaller types: `(uint64_t)my_int`.
 
-11. **Per-process FD table** has 16 slots (PROCESS_MAX_FDS). FDs 0/1/2 are FD_CONSOLE by default. FD types: FD_NONE, FD_VFS, FD_PIPE_READ, FD_PIPE_WRITE, FD_CONSOLE.
+11. **`strtok` is not reentrant.** It uses a static `strtok_state` variable. Don't call from interrupt handlers.
 
-12. **Pipes block the calling process** when reading from an empty pipe or writing to a full pipe. `pipe_read()` returns 0 (EOF) when all write ends are closed.
+12. **Per-process FD table** has 16 slots (PROCESS_MAX_FDS). FDs 0/1/2 are FD_CONSOLE by default. FD types: FD_NONE, FD_VFS, FD_PIPE_READ, FD_PIPE_WRITE, FD_CONSOLE.
 
-13. **Signals**: SIGKILL cannot be caught. Signal handlers must call `sys_sigreturn()` to restore pre-signal context. Default action for SIGCHLD is ignore; for SIGINT/SIGTERM/SIGKILL/SIGPIPE is terminate.
+13. **Pipes block the calling process** when reading from an empty pipe or writing to a full pipe. `pipe_read()` returns 0 (EOF) when all write ends are closed.
 
-14. **User programs are flat binaries at `0x400000`.** They use `user/syscall.h` for syscalls, NOT kernel headers. Compiled with `USER_CFLAGS` (no `-mcmodel=kernel`).
+14. **Signals**: SIGKILL cannot be caught. Signal handlers must call `sys_sigreturn()` to restore pre-signal context. Default action for SIGCHLD is ignore; for SIGINT/SIGTERM/SIGKILL/SIGPIPE is terminate.
 
-15. **User program build pipeline:** `gcc -c` → `ld -T user/user.ld` → `objcopy -O binary` → `objcopy -I binary -O elf64-x86-64` (embeds as `.rodata` in kernel). Symbols: `_binary_<name>_bin_start/end`.
+15. **User programs are flat binaries at `0x400000`.** They use `user/syscall.h` for syscalls, NOT kernel headers. Compiled with `USER_CFLAGS` (no `-mcmodel=kernel`).
 
-16. **Per-process address spaces** copy PML4[256] (phys direct map) and PML4[511] (kernel) from boot PML4. User pages go in PML4[0]. PTE_USER must be set at ALL page table levels.
+16. **User program build pipeline:** `gcc -c` → `ld -T user/user.ld` → `objcopy -O binary` → `objcopy -I binary -O elf64-x86-64` (embeds as `.rodata` in kernel). Symbols: `_binary_<name>_bin_start/end`.
 
-17. **`vga_printf` supports `%-Nu` `%-Ns` `%-Nd` `%-Nx`** (left-aligned with width N), `%0Nu` `%0Nx` (zero-padded), and `%Nu` (right-aligned). All args are 64-bit (see gotcha 9).
+17. **Per-process address spaces** copy PML4[256] (phys direct map) and PML4[511] (kernel) from boot PML4. User pages go in PML4[0]. PTE_USER must be set at ALL page table levels.
 
-18. **`vga_putchar()` auto-mirrors to serial** (COM1) once `debug_init()` completes. Shell commands should use `vga_printf()` — no separate `debug_printf()` needed. Interactive tests validate output via the serial log.
+18. **`vga_printf` supports `%-Nu` `%-Ns` `%-Nd` `%-Nx`** (left-aligned with width N), `%0Nu` `%0Nx` (zero-padded), and `%Nu` (right-aligned). All args are 64-bit (see gotcha 10).
 
-19. **PS/2 mouse init must drain ACK and unmask cascade.** After enabling the mouse (`0xF4`), it sends an ACK byte (0xFA) on port 0x60. This byte MUST be read immediately — if left in the PS/2 output buffer, it blocks ALL keyboard input. Also, IRQ 12 (mouse) is on the slave PIC, so cascade (IRQ 2) on the master PIC must be unmasked, or the ACK will never be read by the handler.
+19. **`vga_putchar()` auto-mirrors to serial** (COM1) once `debug_init()` completes. Shell commands should use `vga_printf()` — no separate `debug_printf()` needed. Interactive tests validate output via the serial log.
 
-20. **Native QEMU (10.1.3) `-serial file:` is broken on Windows** — output is never flushed to disk. Use `-serial stdio` for interactive use or `-serial tcp:` for programmatic access.
+20. **PS/2 mouse init must drain ACK and unmask cascade.** After enabling the mouse (`0xF4`), it sends an ACK byte (0xFA) on port 0x60. This byte MUST be read immediately — if left in the PS/2 output buffer, it blocks ALL keyboard input. Also, IRQ 12 (mouse) is on the slave PIC, so cascade (IRQ 2) on the master PIC must be unmasked, or the ACK will never be read by the handler.
 
-21. **A PT_LOAD segment's `elf_data`/`elf_data_filesz` must be adjusted for page alignment, not just `elf_vaddr`.** `elf_load()` page-aligns `seg_start` down from `p_vaddr` for demand paging, but the segment's *content* pointer (`data + p_offset`) and its valid-length (`p_filesz`) must be shifted backward/lengthened by that same `p_vaddr & (PAGE_SIZE-1)` delta — otherwise every demand-page fault in that segment reads from the wrong file offset, silently returning zero-filled bytes for data (e.g. GOT entries) that genuinely exists in the file. GCC/`ld`-produced segments are always page-aligned so this never showed up before TCC's own segment layout (which isn't) started getting executed.
+21. **Native QEMU (10.1.3) `-serial file:` is broken on Windows** — output is never flushed to disk. Use `-serial stdio` for interactive use or `-serial tcp:` for programmatic access.
 
-22. **TCC (`user/tcc/`) has no target-side `va_list`/`va_arg` support on x86-64 outside its own runtime library, which this port doesn't ship.** Don't have TCC compile a `.c` file that *implements* a variadic function (real `__builtin_va_arg` body) — link the precompiled `user/lib/hobbyc.o` instead. Calling a variadic function needs nothing special on the caller side. `user/lib/libc.h` picks the right `va_list` per toolchain via `#ifdef __TINYC__`.
+22. **A PT_LOAD segment's `elf_data`/`elf_data_filesz` must be adjusted for page alignment, not just `elf_vaddr`.** `elf_load()` page-aligns `seg_start` down from `p_vaddr` for demand paging, but the segment's *content* pointer (`data + p_offset`) and its valid-length (`p_filesz`) must be shifted backward/lengthened by that same `p_vaddr & (PAGE_SIZE-1)` delta — otherwise every demand-page fault in that segment reads from the wrong file offset, silently returning zero-filled bytes for data (e.g. GOT entries) that genuinely exists in the file. GCC/`ld`-produced segments are always page-aligned so this never showed up before TCC's own segment layout (which isn't) started getting executed.
 
-23. **TCC output must be `-static -nostdlib`.** The default dynamic-link path builds `.dynsym`/`.dynamic`/`PT_INTERP` sections `user/ld.so.c` was never built to handle (its relocation support is narrow — `MAX_LIBS 8`, only a few relocation types) and will crash.
+23. **TCC (`user/tcc/`) has no target-side `va_list`/`va_arg` support on x86-64 outside its own runtime library, which this port doesn't ship.** Don't have TCC compile a `.c` file that *implements* a variadic function (real `__builtin_va_arg` body) — link the precompiled `user/lib/hobbyc.o` instead. Calling a variadic function needs nothing special on the caller side. `user/lib/libc.h` picks the right `va_list` per toolchain via `#ifdef __TINYC__`.
 
-24. **`user/lib/*.c` gets compiled twice, by two different compilers, and must parse under both.** The host cross-toolchain compiles it into `hobbyc.o` (and into `tcc.elf`/`libc_test.elf` directly); nothing in it should assume GCC-only builtins without a `__TINYC__`-guarded fallback (see gotcha 22).
+24. **TCC output must be `-static -nostdlib`.** The default dynamic-link path builds `.dynsym`/`.dynamic`/`PT_INTERP` sections `user/ld.so.c` was never built to handle (its relocation support is narrow — `MAX_LIBS 8`, only a few relocation types) and will crash.
+
+25. **`user/lib/*.c` gets compiled twice, by two different compilers, and must parse under both.** The host cross-toolchain compiles it into `hobbyc.o` (and into `tcc.elf`/`libc_test.elf` directly); nothing in it should assume GCC-only builtins without a `__TINYC__`-guarded fallback (see gotcha 23).

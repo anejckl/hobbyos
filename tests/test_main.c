@@ -62,6 +62,9 @@ int main(void) {
     test_libc_gapfill_suite();
     printf("\n");
 
+    test_kheap_suite();
+    printf("\n");
+
     printf("=======================\n");
     printf("Results: %d passed, %d failed, %d total\n",
            tests_passed, tests_failed, tests_passed + tests_failed);
