@@ -3,7 +3,7 @@ OUTPUT_ARCH(i386:x86-64)
 ENTRY(_ldso_start)
 
 SECTIONS {
-    . = 0x0;
+    . = SIZEOF_HEADERS;
 
     .text   : { *(.text .text.*) }
     .rodata : { *(.rodata .rodata.*) }
