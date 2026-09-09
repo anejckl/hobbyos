@@ -589,13 +589,40 @@ def run_tests(native=False):
         # a .dynsym/.dynamic/PT_INTERP section set that has never been
         # exercised on HobbyOS and segfaults; -static skips it entirely,
         # matching the plan's static-only-output decision.
-        interactive_test(
-            "tcc_compile_hello",
-            "run tcc -static -nostdlib -o /tcc_tests/tccout /tcc_tests/hello.c",
-            "tcc: error", negate=True, post_delay=3.0)
+        #
+        # tcc_compile_hello positively waits for the shell prompt to
+        # return (i.e. the foreground `run tcc ...` truly finished) before
+        # checking for "tcc: error", rather than a fixed-delay negate
+        # check — a fixed delay only proves no error had appeared *yet*,
+        # not that compilation had actually completed, and TCC's compile
+        # time varies a lot under CI's slower, non-KVM QEMU. A short fixed
+        # delay was previously enough on a fast local host but let
+        # tcc_run_compiled race ahead of the real compile finishing and
+        # try to exec a not-yet-written file on CI, making that next test
+        # flaky there even though this one reported a false green.
+        t0 = time.time()
+        qemu.snapshot_serial()
+        time.sleep(0.3)
+        cmd = "run tcc -static -nostdlib -o /tcc_tests/tccout /tcc_tests/hello.c"
+        qemu.type_line(cmd)
+        prompt_back = qemu.wait_for_pattern_in_new("hobbyos> ", timeout=BOOT_TIMEOUT)
+        full = qemu.read_serial()
+        new_output = full[qemu.serial_pos:]
+        compile_ok = prompt_back and ("tcc: error" not in new_output)
+        results.append({
+            "name": "tcc_compile_hello",
+            "passed": compile_ok,
+            "duration_seconds": round(time.time() - t0, 1),
+            "output_snippet": new_output[-200:] if new_output else "",
+            "error": None if compile_ok else (
+                "shell prompt never returned" if not prompt_back
+                else "Pattern should be absent but found: tcc: error"),
+        })
+        qemu.serial_pos = len(qemu.read_serial())
+
         interactive_test("tcc_enter_sh", "run sh", "$ ", post_delay=2.0)
         interactive_test("tcc_run_compiled", "/tcc_tests/tccout",
-                          "tcc works!", post_delay=2.0)
+                          "tcc works!", post_delay=4.0)
         interactive_test("tcc_exit_sh", "exit", "hobbyos>", post_delay=1.5)
 
         # --- Test 31: ping QEMU DNS server (10.0.2.3, internal to SLIRP) ---
