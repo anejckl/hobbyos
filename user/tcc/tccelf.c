@@ -989,6 +989,22 @@ static struct sym_attr * put_got_entry(TCCState *s1, int dyn_reloc_type,
                       sym_index);
     }
 
+    /* The GOT entry reserved above always needs its offset recorded so
+     * fill_got_entry() can later patch it with the symbol's resolved
+     * address (fill_got() dispatches R_X86_64_PLT32 relocations there
+     * too, not just plain GOT ones) — regardless of whether a PLT stub
+     * is *also* built on top of it below. Previously this was only set
+     * in the plain-GOT (need_plt_entry == false) case, so every PLT
+     * entry's GOT slot was silently left unpatched (fill_got_entry saw
+     * got_offset == 0 and returned early) — the PLT stub then jumped
+     * through a slot that was never actually written, landing on
+     * whatever bytes happened to sit there (in practice, adjacent PLT
+     * stub code), rather than the real function address. This only
+     * surfaced once tcc-compiled code called into a separately
+     * provided, precompiled object — no fixture before that ever
+     * exercised the PLT32 path at all. */
+    attr->got_offset = got_offset;
+
     if (need_plt_entry) {
         if (!s1->plt) {
     	    s1->plt = new_section(s1, ".plt", SHT_PROGBITS,
@@ -1006,9 +1022,6 @@ static struct sym_attr * put_got_entry(TCCState *s1, int dyn_reloc_type,
         strcpy(plt_name + len, "@plt");
         attr->plt_sym = put_elf_sym(s1->symtab, attr->plt_offset, sym->st_size,
             ELFW(ST_INFO)(STB_GLOBAL, STT_FUNC), 0, s1->plt->sh_num, plt_name);
-
-    } else {
-        attr->got_offset = got_offset;
     }
 
     return attr;
@@ -1347,6 +1360,21 @@ ST_FUNC void fill_got(TCCState *s1)
 		case R_X86_64_GOTPCRELX:
 		case R_X86_64_REX_GOTPCRELX:
                 case R_X86_64_PLT32:
+                    fill_got_entry(s1, rel);
+                    break;
+                /* The relocation that actually needs to patch a PLT-called
+                 * external symbol's GOT slot (created in put_got_entry()
+                 * via put_elf_reloc(symtab_section, s1->got, got_offset,
+                 * dyn_reloc_type, sym_index) with dyn_reloc_type ==
+                 * R_JMP_SLOT) was missing from this switch entirely. The
+                 * call site's own relocation (in .rela.text) gets rewritten
+                 * in build_got_entries() to reference the synthetic
+                 * '<sym>@plt' symbol instead — a distinct symbol whose own
+                 * sym_attr never has got_offset set — so processing R_PLT32
+                 * above never reaches the real symbol's attr. Without this
+                 * case, the actual GOT slot the PLT stub jumps through was
+                 * never written at all. */
+                case R_X86_64_JUMP_SLOT:
                     fill_got_entry(s1, rel);
                     break;
             }
@@ -2192,11 +2220,8 @@ static int elf_output_file(TCCState *s1, const char *filename)
             dynamic->data_offset = dyninf.data_offset;
             fill_dynamic(s1, &dyninf);
 
-            /* put in GOT the dynamic section address and relocate PLT */
+            /* put in GOT the dynamic section address */
             write32le(s1->got->data, dynamic->sh_addr);
-            if (file_type == TCC_OUTPUT_EXE
-                || (RELOCATE_DLLPLT && file_type == TCC_OUTPUT_DLL))
-                relocate_plt(s1);
 
             /* relocate symbols in .dynsym now that final addresses are known */
             for_each_elem(s1->dynsym, 1, sym, ElfW(Sym)) {
@@ -2207,18 +2232,53 @@ static int elf_output_file(TCCState *s1, const char *filename)
             }
         }
 
+        /* Relocate the PLT: convert each stub's placeholder got_offset
+         * (a raw section-relative offset stored by create_plt_entry() at
+         * build time) into a real PC-relative displacement, now that
+         * final section addresses are known. This was previously bundled
+         * inside `if (dynamic)` above alongside dynamic-linking-only setup,
+         * but a *static* executable's PLT stubs need this exact same fixup
+         * too and dynamic is never created for a static link (relocate_plt
+         * itself already no-ops via its own `if (!s1->plt) return;` when
+         * there's nothing to do, so calling it unconditionally here is
+         * safe). Without this, a static executable's PLT stub jump target
+         * was left as the raw, un-fixed-up got_offset value — landing
+         * wherever `next_instruction + got_offset` happened to be (in
+         * practice, a handful of bytes into the *next* PLT stub's own
+         * code), not the real GOT slot. */
+        if (file_type == TCC_OUTPUT_EXE
+            || (RELOCATE_DLLPLT && file_type == TCC_OUTPUT_DLL))
+            relocate_plt(s1);
+
         /* if building executable or DLL, then relocate each section
            except the GOT which is already relocated */
         ret = final_sections_reloc(s1);
         if (ret)
             goto the_end;
-	tidy_section_headers(s1, sec_order);
 
-        /* Perform relocation to GOT or PLT entries */
+        /* Perform relocation to GOT or PLT entries. This must run before
+         * tidy_section_headers() below: fill_got()/fill_local_got_entries()
+         * find the relocations they need to apply by scanning s1->sections[]
+         * for SHT_RELX sections, but those relocation sections are unnamed
+         * (never given a real sh_name — they're a link-time-only construct,
+         * not meant to survive into the final executable) and
+         * tidy_section_headers() discards every unnamed section by
+         * truncating s1->nb_sections. Calling it first (as this file
+         * previously did) silently discards every such relocation before
+         * fill_got() ever runs, so no external PLT-called symbol's GOT slot
+         * ever gets patched with its real address — the PLT stub then
+         * jumps through whatever bytes happen to already sit in that
+         * memory (in practice, adjacent code), rather than crashing
+         * predictably or resolving correctly. This never surfaced before
+         * because no fixture prior to this one ever had tcc-compiled code
+         * call into a separately provided, precompiled object (the only
+         * case that exercises R_X86_64_PLT32/GOT resolution at all). */
         if (file_type == TCC_OUTPUT_EXE && s1->static_link)
             fill_got(s1);
         else if (s1->got)
             fill_local_got_entries(s1);
+
+	tidy_section_headers(s1, sec_order);
     }
 
     /* Create the ELF file with name 'filename' */

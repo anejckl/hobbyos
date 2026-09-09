@@ -16,9 +16,25 @@ typedef int64_t            ssize_t;
 #define true 1
 #define false 0
 
+/* va_list: real upstream TCC has no target-side __builtin_va_list
+ * support on x86-64 outside its own runtime library (which this port
+ * doesn't ship — see the tccrun.c exclusion note in the Makefile), so
+ * it can't parse this declaration using the real GCC builtin type.
+ * vsnprintf's actual varargs-consuming implementation (stdio.c) is
+ * only ever compiled by the host cross-compiler, never by tcc itself
+ * (Milestone 4 links a precompiled libc object instead) — tcc only
+ * ever needs this *declaration* to parse, never to act on a real
+ * va_list value, so a plain pointer stand-in is fine under __TINYC__.
+ */
+#ifdef __TINYC__
+typedef void *va_list;
+#else
+typedef __builtin_va_list va_list;
+#endif
+
 /* stdio */
 int printf(const char *fmt, ...);
-int vsnprintf(char *buf, size_t size, const char *fmt, __builtin_va_list ap);
+int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
 int snprintf(char *buf, size_t size, const char *fmt, ...);
 int puts(const char *s);
 int fputs(const char *s, int fd);

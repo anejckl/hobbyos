@@ -104,8 +104,26 @@ static int elf_load_segments(uint64_t pml4_phys, const uint8_t *data, uint64_t s
                 vma->flags = MAP_PRIVATE;
                 vma->type = VMA_ELF;
                 vma->in_use = true;
-                vma->elf_data = data + phdr->p_offset;
-                vma->elf_data_filesz = phdr->p_filesz;
+                /* vma->elf_vaddr is seg_start, page-aligned down from the
+                 * segment's real (possibly unaligned) p_vaddr — but
+                 * elf_data/elf_data_filesz must line up with THAT aligned
+                 * address, not the raw p_vaddr/p_offset, since every
+                 * demand-page fault computes page_offset relative to
+                 * elf_vaddr. Without this adjustment, a segment whose
+                 * p_vaddr isn't page-aligned (e.g. the .data/.got/.bss
+                 * segment right after a preceding PT_LOAD, extremely
+                 * common) has its entire elf_data range read starting
+                 * `align_delta` bytes too late: page_offset ends up
+                 * comparing against the wrong file position for every
+                 * single fault in this segment, and content that's
+                 * genuinely present in the file (like a GOT entry) can
+                 * land past elf_data_filesz and get silently zero-filled
+                 * instead of copied — the loaded page's bytes end up
+                 * shifted by align_delta relative to where the ELF file
+                 * actually says they belong. */
+                uint64_t align_delta = vaddr - seg_start;
+                vma->elf_data = data + phdr->p_offset - align_delta;
+                vma->elf_data_filesz = phdr->p_filesz + align_delta;
                 vma->elf_vaddr = seg_start;
                 /* Only the first segment "owns" the data for freeing purposes */
                 vma->elf_data_owned = false;

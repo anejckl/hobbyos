@@ -175,6 +175,17 @@ TCC_OBJS = user/tcc/crt0.o user/tcc/tcc.o user/tcc/hobbyos_compat.o $(TCC_LIB_OB
 user/tcc.elf: $(TCC_OBJS) user/user.ld
 	$(LD) -T user/user.ld -nostdlib -o $@ $(TCC_OBJS)
 
+# Combined, precompiled (host cross-toolchain) libc object for tcc to link
+# target programs against (Milestone 4) — NOT compiled by tcc itself. Real
+# upstream TCC has no target-side __builtin_va_list/va_arg support on
+# x86-64 outside its own runtime library (which this port deliberately
+# doesn't ship, see the tccrun.c exclusion note above); a program calling
+# a variadic function like printf() needs no such support on the caller
+# side, only inside printf's own implementation, so linking that
+# implementation as a precompiled object sidesteps the gap entirely.
+user/lib/hobbyc.o: $(TCC_LIB_OBJS)
+	$(LD) -r -o $@ $(TCC_LIB_OBJS)
+
 # --- Shared object build rules ---
 
 # ld.so: user-space dynamic linker (ET_DYN, base 0)
@@ -198,7 +209,7 @@ iso: $(KERNEL_BIN)
 
 # ext2 disk image with user programs + shared libraries
 # Populated via debugfs (not `mount -o loop`) so this works without root.
-disk.img: $(patsubst %,user/%.elf,$(USER_PROGRAMS)) user/ld.so user/lib/libc.so
+disk.img: $(patsubst %,user/%.elf,$(USER_PROGRAMS)) user/ld.so user/lib/libc.so user/lib/hobbyc.o
 	dd if=/dev/zero of=disk.img bs=1M count=64
 	mkfs.ext2 -F -b 4096 disk.img
 	@rm -f /tmp/hobbyos_disk_debugfs.script
@@ -206,6 +217,9 @@ disk.img: $(patsubst %,user/%.elf,$(USER_PROGRAMS)) user/ld.so user/lib/libc.so
 	@echo "mkdir /lib" >> /tmp/hobbyos_disk_debugfs.script
 	@echo "mkdir /tcc_tests" >> /tmp/hobbyos_disk_debugfs.script
 	@echo "write tests/tcc_fixtures/hello.c /tcc_tests/hello.c" >> /tmp/hobbyos_disk_debugfs.script
+	@echo "write tests/tcc_fixtures/libc_demo.c /tcc_tests/libc_demo.c" >> /tmp/hobbyos_disk_debugfs.script
+	@echo "write user/lib/libc.h /tcc_tests/libc.h" >> /tmp/hobbyos_disk_debugfs.script
+	@echo "write user/lib/hobbyc.o /tcc_tests/hobbyc.o" >> /tmp/hobbyos_disk_debugfs.script
 	@for prog in $(USER_PROGRAMS); do \
 		if [ -f user/$$prog.elf ]; then \
 			echo "write user/$$prog.elf /bin/$$prog" >> /tmp/hobbyos_disk_debugfs.script; \

@@ -98,11 +98,12 @@ make run
 - **Core utilities**: `cat`, `echo`, `grep`, `head`, `tail`, `ls`, `ps`, `cp`, `mv`, `rm`, `mkdir`, `touch`, `df`, `top`, `kill`, `id`, `whoami`
 - **Network tools**: `ping`, `nc`, `httpd`, `ifconfig`, `netstat`
 - **Window manager (`wm`)** with themed windows, terminal emulator, task manager, file browser
+- **Self-hosting C toolchain**: a ported [TCC](https://bellard.org/tcc/) (`/bin/tcc`) compiles and runs C programs from inside HobbyOS itself — including ones using the real libc (`printf`, `malloc`, `fork`/`wait`), statically linked, no host toolchain involved
 
 ### Testing
-- **278 host unit tests** (string, PMM, printf, ELF, VFS, pipe, signal, netbuf, device, cred, bcache, swap, journal)
+- **313 host unit tests** (string, PMM, printf, ELF, VFS, pipe, signal, netbuf, device, cred, bcache, swap, journal, libc gap-fill)
 - **69 QEMU smoke tests** (boot + autotest integration)
-- **38 interactive tests** (keystroke injection via QEMU monitor)
+- **48 interactive tests** (keystroke injection via QEMU monitor, incl. compiling/running C programs with `tcc`)
 - **Native QEMU sendkeys** test script for Windows
 
 ---
@@ -147,10 +148,11 @@ hobbyos/
 │   ├── sh.c                         # User shell with pipes, redirects, chaining
 │   ├── cat.c, echo.c, grep.c, ...  # Core utilities
 │   ├── wm.c                         # Window manager
-│   └── lib/libgfx.c                # Graphics library for WM
+│   ├── lib/                         # libgfx.c (WM graphics) + extended libc (printf/malloc/FILE*/...)
+│   └── tcc/                         # Vendored, ported TCC — self-hosting C toolchain, builds to /bin/tcc
 ├── tests/
-│   ├── test_main.c                  # Host test runner (278 tests)
-│   ├── test_interactive.py          # QEMU interactive test suite (38 tests)
+│   ├── test_main.c                  # Host test runner (313 tests)
+│   ├── test_interactive.py          # QEMU interactive test suite (48 tests)
 │   └── qemu_smoke.exp               # Boot smoke test patterns (69 checks)
 ├── Makefile                         # Build system
 ├── Dockerfile                       # Ubuntu 24.04 build environment
@@ -209,7 +211,7 @@ hobbyos/
 | `make test` | Run all tests (host + QEMU smoke) |
 | `make test-host` | Host unit tests only (fast, no QEMU) |
 | `make test-qemu` | QEMU boot smoke test |
-| `make test-interactive` | Interactive QEMU tests (38 tests, ~3 min) |
+| `make test-interactive` | Interactive QEMU tests (48 tests, ~3 min) |
 
 ### Run Tests
 

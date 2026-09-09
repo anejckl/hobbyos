@@ -208,7 +208,25 @@ hobbyos/
 │   ├── pipe_test.c             # Pipe communication test
 │   ├── signal_test.c           # Signal delivery test
 │   ├── procfs_test.c           # /proc/self/status read test
-│   └── user.ld                 # User program linker script (entry at 0x400000)
+│   ├── libc_test.c             # Exercises user/lib/*.c (malloc stability, FILE*, deep recursion)
+│   ├── user.ld                 # User program linker script (entry at 0x400000)
+│   │
+│   ├── lib/                    # Extended libc, statically linked into programs that use it
+│   │   ├── libc.h              # Shared declarations (types, stdio/string/stdlib/malloc, sys_*_libc wrappers)
+│   │   ├── libc.c               # Raw sys_*_libc syscall wrappers
+│   │   ├── malloc.c            # Free-list allocator (prev+next, backward+forward coalescing)
+│   │   ├── stdio.c             # printf/vsnprintf/snprintf/puts/fputs/fgets (real __builtin_va_arg)
+│   │   ├── stdio_file.c        # FILE* layer (fopen/fread/fwrite/fseek/...) over the fd syscalls
+│   │   ├── string.c            # memmove/memcmp/strcat/strncat/strdup/...
+│   │   └── stdlib.c            # strtol/strtoul/qsort/getenv (stub, always NULL)
+│   │
+│   └── tcc/                    # Vendored TCC (self-hosting toolchain, see below), builds to /bin/tcc
+│       ├── tcc.c, libtcc.c, tccpp.c, tccgen.c, tccelf.c, x86_64-gen.c,
+│       │   x86_64-asm.c, x86_64-link.c, tccasm.c, i386-asm.c   # TCC's own sources (ONE_SOURCE amalgamation via tcc.c)
+│       ├── config.h            # Hand-written (normally ./configure-generated)
+│       ├── hobbyos_compat.c    # POSIX-shaped shims backed by sys_*_libc (open/read/write/gettimeofday/printf/...)
+│       ├── crt0.c              # _start entry point for the tcc binary itself
+│       └── compat/             # Minimal stdio.h/stdlib.h/string.h/... so TCC's own source compiles under -nostdinc
 │
 ├── scripts/
 │   └── pre-commit              # Git hook — runs make test-host before commits
@@ -219,9 +237,11 @@ hobbyos/
     ├── test_string.c            # Tests kernel/string.c (includes actual source)
     ├── test_pmm.c              # Tests PMM bitmap functions (includes actual source)
     ├── test_printf.c           # Tests printf integer formatting (replicated logic)
+    ├── test_libc_gapfill.c     # Tests user/lib/*.c additions (memmove, qsort, strtol, ...)
+    ├── tcc_fixtures/           # .c fixtures tcc compiles inside QEMU during interactive tests
     ├── qemu_smoke.sh           # QEMU boot smoke test script
     ├── qemu_smoke.exp          # Expected serial output patterns
-    └── test_interactive.py     # Interactive QEMU test suite (20 tests, sendkey-based)
+    └── test_interactive.py     # Interactive QEMU test suite (sendkey-based)
 ```
 
 ## Architecture Quick Reference
@@ -289,6 +309,24 @@ hobbyos/
 - Master: IRQ 0–7 → INT 32–39
 - Slave: IRQ 8–15 → INT 40–47
 - Timer = IRQ 0 (INT 32), Keyboard = IRQ 1 (INT 33), COM1 serial RX = IRQ 4 (INT 36)
+
+## TCC Self-Hosting Toolchain
+
+HobbyOS can compile and run its own C programs from inside itself via a vendored, ported [TCC](https://bellard.org/tcc/) (Tiny C Compiler), built as `/bin/tcc`. Milestones 0-4 of the self-hosting plan are done: TCC boots, compiles trivial syscall-only programs, and compiles/links/runs programs against the real extended libc (`printf`/`malloc`/`fork`/`wait`).
+
+**Compiling something inside HobbyOS:**
+```
+run tcc -static -nostdlib -o /path/to/output /path/to/source.c [more.c/.o inputs...]
+```
+Always pass `-static -nostdlib` — TCC's default dynamic-link output path builds a `.dynsym`/`.dynamic`/`PT_INTERP` section set this port has never exercised and will crash; static output sidesteps `user/ld.so.c`'s narrow relocation support entirely (see Gotcha below).
+
+**Using the real libc from TCC-compiled code:** don't have TCC compile `user/lib/stdio.c` (or anything else that itself implements a variadic function body with real `__builtin_va_arg`) — link the **precompiled** `user/lib/hobbyc.o` instead (`make user/lib/hobbyc.o`, a partial-link of all of `user/lib/*.c` via `ld -r`, built by the host cross-toolchain). A program merely *calling* a variadic function like `printf(fmt, ...)` needs no special support on the caller side; only `printf`'s own implementation needs real `va_arg`, and real upstream TCC has no target-side `__builtin_va_list`/`va_arg` support on x86-64 outside its own runtime library (`libtcc1.a`), which this port deliberately doesn't ship (see the `tccrun.c` exclusion note in the Makefile). Example:
+```
+run tcc -static -nostdlib -o /tmp/prog /tmp/prog.c /tcc_tests/hobbyc.o
+```
+`user/lib/libc.h` handles this with `#ifdef __TINYC__` (TCC always predefines this): `va_list` becomes a plain `void *` stand-in under TCC (fine — TCC only ever needs the *declaration* to parse, never to act on a real `va_list` value, since the implementing `.c` file is never compiled by TCC) and the real `__builtin_va_list` under the host cross-compiler (which does implement `stdio.c`'s bodies).
+
+**Fixtures:** `tests/tcc_fixtures/hello.c` (raw syscalls only, no libc) and `tests/tcc_fixtures/libc_demo.c` (real libc + fork/wait) are shipped to `/tcc_tests/` on the disk image for `tests/test_interactive.py`'s `tcc_*` tests to compile and run.
 
 ## Conventions
 
@@ -485,14 +523,22 @@ Then:
 
 14. **User programs are flat binaries at `0x400000`.** They use `user/syscall.h` for syscalls, NOT kernel headers. Compiled with `USER_CFLAGS` (no `-mcmodel=kernel`).
 
-12. **User program build pipeline:** `gcc -c` → `ld -T user/user.ld` → `objcopy -O binary` → `objcopy -I binary -O elf64-x86-64` (embeds as `.rodata` in kernel). Symbols: `_binary_<name>_bin_start/end`.
+15. **User program build pipeline:** `gcc -c` → `ld -T user/user.ld` → `objcopy -O binary` → `objcopy -I binary -O elf64-x86-64` (embeds as `.rodata` in kernel). Symbols: `_binary_<name>_bin_start/end`.
 
-13. **Per-process address spaces** copy PML4[256] (phys direct map) and PML4[511] (kernel) from boot PML4. User pages go in PML4[0]. PTE_USER must be set at ALL page table levels.
+16. **Per-process address spaces** copy PML4[256] (phys direct map) and PML4[511] (kernel) from boot PML4. User pages go in PML4[0]. PTE_USER must be set at ALL page table levels.
 
-14. **`vga_printf` supports `%-Nu` `%-Ns` `%-Nd` `%-Nx`** (left-aligned with width N), `%0Nu` `%0Nx` (zero-padded), and `%Nu` (right-aligned). All args are 64-bit (see gotcha 9).
+17. **`vga_printf` supports `%-Nu` `%-Ns` `%-Nd` `%-Nx`** (left-aligned with width N), `%0Nu` `%0Nx` (zero-padded), and `%Nu` (right-aligned). All args are 64-bit (see gotcha 9).
 
-15. **`vga_putchar()` auto-mirrors to serial** (COM1) once `debug_init()` completes. Shell commands should use `vga_printf()` — no separate `debug_printf()` needed. Interactive tests validate output via the serial log.
+18. **`vga_putchar()` auto-mirrors to serial** (COM1) once `debug_init()` completes. Shell commands should use `vga_printf()` — no separate `debug_printf()` needed. Interactive tests validate output via the serial log.
 
-16. **PS/2 mouse init must drain ACK and unmask cascade.** After enabling the mouse (`0xF4`), it sends an ACK byte (0xFA) on port 0x60. This byte MUST be read immediately — if left in the PS/2 output buffer, it blocks ALL keyboard input. Also, IRQ 12 (mouse) is on the slave PIC, so cascade (IRQ 2) on the master PIC must be unmasked, or the ACK will never be read by the handler.
+19. **PS/2 mouse init must drain ACK and unmask cascade.** After enabling the mouse (`0xF4`), it sends an ACK byte (0xFA) on port 0x60. This byte MUST be read immediately — if left in the PS/2 output buffer, it blocks ALL keyboard input. Also, IRQ 12 (mouse) is on the slave PIC, so cascade (IRQ 2) on the master PIC must be unmasked, or the ACK will never be read by the handler.
 
-17. **Native QEMU (10.1.3) `-serial file:` is broken on Windows** — output is never flushed to disk. Use `-serial stdio` for interactive use or `-serial tcp:` for programmatic access.
+20. **Native QEMU (10.1.3) `-serial file:` is broken on Windows** — output is never flushed to disk. Use `-serial stdio` for interactive use or `-serial tcp:` for programmatic access.
+
+21. **A PT_LOAD segment's `elf_data`/`elf_data_filesz` must be adjusted for page alignment, not just `elf_vaddr`.** `elf_load()` page-aligns `seg_start` down from `p_vaddr` for demand paging, but the segment's *content* pointer (`data + p_offset`) and its valid-length (`p_filesz`) must be shifted backward/lengthened by that same `p_vaddr & (PAGE_SIZE-1)` delta — otherwise every demand-page fault in that segment reads from the wrong file offset, silently returning zero-filled bytes for data (e.g. GOT entries) that genuinely exists in the file. GCC/`ld`-produced segments are always page-aligned so this never showed up before TCC's own segment layout (which isn't) started getting executed.
+
+22. **TCC (`user/tcc/`) has no target-side `va_list`/`va_arg` support on x86-64 outside its own runtime library, which this port doesn't ship.** Don't have TCC compile a `.c` file that *implements* a variadic function (real `__builtin_va_arg` body) — link the precompiled `user/lib/hobbyc.o` instead. Calling a variadic function needs nothing special on the caller side. `user/lib/libc.h` picks the right `va_list` per toolchain via `#ifdef __TINYC__`.
+
+23. **TCC output must be `-static -nostdlib`.** The default dynamic-link path builds `.dynsym`/`.dynamic`/`PT_INTERP` sections `user/ld.so.c` was never built to handle (its relocation support is narrow — `MAX_LIBS 8`, only a few relocation types) and will crash.
+
+24. **`user/lib/*.c` gets compiled twice, by two different compilers, and must parse under both.** The host cross-toolchain compiles it into `hobbyc.o` (and into `tcc.elf`/`libc_test.elf` directly); nothing in it should assume GCC-only builtins without a `__TINYC__`-guarded fallback (see gotcha 22).

@@ -625,6 +625,41 @@ def run_tests(native=False):
                           "tcc works!", post_delay=4.0)
         interactive_test("tcc_exit_sh", "exit", "hobbyos>", post_delay=1.5)
 
+        # --- Test 30h-l: tcc Milestone 4 — compiles a program against the
+        # real extended libc (printf/malloc/free/fork/wait), linked
+        # against a precompiled libc object (hobbyc.o) rather than
+        # compiled by tcc itself (real upstream TCC has no target-side
+        # __builtin_va_list/va_arg support on x86-64 outside its own
+        # runtime library, which this port doesn't ship). Same
+        # positive-wait pattern as tcc_compile_hello above, for the same
+        # reason (a fixed delay only proves no error appeared yet, not
+        # that compilation actually finished). ---
+        t0 = time.time()
+        qemu.snapshot_serial()
+        time.sleep(0.3)
+        cmd = ("run tcc -static -nostdlib -o /tcc_tests/libcout "
+               "/tcc_tests/libc_demo.c /tcc_tests/hobbyc.o")
+        qemu.type_line(cmd)
+        prompt_back = qemu.wait_for_pattern_in_new("hobbyos> ", timeout=BOOT_TIMEOUT)
+        full = qemu.read_serial()
+        new_output = full[qemu.serial_pos:]
+        compile_ok = prompt_back and ("tcc: error" not in new_output)
+        results.append({
+            "name": "tcc_compile_libc_demo",
+            "passed": compile_ok,
+            "duration_seconds": round(time.time() - t0, 1),
+            "output_snippet": new_output[-200:] if new_output else "",
+            "error": None if compile_ok else (
+                "shell prompt never returned" if not prompt_back
+                else "Pattern should be absent but found: tcc: error"),
+        })
+        qemu.serial_pos = len(qemu.read_serial())
+
+        interactive_test("tcc_libc_enter_sh", "run sh", "$ ", post_delay=2.0)
+        interactive_test("tcc_libc_run_compiled", "/tcc_tests/libcout",
+                          "tcc libc demo: all done", post_delay=4.0)
+        interactive_test("tcc_libc_exit_sh", "exit", "hobbyos>", post_delay=1.5)
+
         # --- Test 31: ping QEMU DNS server (10.0.2.3, internal to SLIRP) ---
         # Note: external IPs like 8.8.8.8 fail in CI (no outbound ICMP allowed)
         interactive_test("ping_dns", "ping 10.0.2.3", "Reply from", post_delay=5.0)
