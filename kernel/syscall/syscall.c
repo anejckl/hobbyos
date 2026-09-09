@@ -529,7 +529,7 @@ static void syscall_fork(struct interrupt_frame *frame) {
     }
 
     /* 2. Allocate child kernel stack with guard page */
-    void *child_guard_and_stack = kmalloc_page_aligned(PAGE_SIZE + PROCESS_STACK_SIZE);
+    void *child_guard_and_stack = process_alloc_kernel_stack();
     if (!child_guard_and_stack) {
         frame->rax = (uint64_t)-1;
         return;

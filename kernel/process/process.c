@@ -19,11 +19,36 @@
  * carved out of a freed one). Re-map the guard page with a fresh
  * physical page first, so the entire region is genuinely usable
  * before kfree() ever sees it. */
+/* Kernel stacks are always the same fixed size (one guard page plus
+ * PROCESS_STACK_SIZE) and get freed constantly as processes are reaped —
+ * but kfree() is a no-op (bump allocator, kernel/memory/kheap.c), so
+ * every process that has ever existed would otherwise permanently
+ * consume ~20KB of the 4MB kheap for the rest of the session. A small
+ * free list just for this one fixed allocation size sidesteps that
+ * without touching the general allocator: a reaped stack goes back
+ * here instead of to kfree(), and future stack allocations check here
+ * first. Capped at MAX_PROCESSES since that's the most that could ever
+ * be outstanding at once. */
+#define KSTACK_ALLOC_SIZE (PAGE_SIZE + PROCESS_STACK_SIZE)
+static void *kstack_free_list[MAX_PROCESSES];
+static int kstack_free_count = 0;
+
+void *process_alloc_kernel_stack(void) {
+    if (kstack_free_count > 0)
+        return kstack_free_list[--kstack_free_count];
+    return kmalloc_page_aligned(KSTACK_ALLOC_SIZE);
+}
+
 static void free_kernel_stack(uint64_t kernel_stack_guard) {
     uint64_t guard_phys = pmm_alloc_page();
     if (guard_phys)
         vmm_map_page(kernel_stack_guard, guard_phys, PTE_WRITABLE);
-    kfree((void *)kernel_stack_guard);
+    if (kstack_free_count < MAX_PROCESSES)
+        kstack_free_list[kstack_free_count++] = (void *)kernel_stack_guard;
+    /* else: shouldn't happen (list is sized to MAX_PROCESSES outstanding
+     * stacks), but fall back to the no-op kfree() rather than overflow. */
+    else
+        kfree((void *)kernel_stack_guard);
 }
 
 static struct process process_table[MAX_PROCESSES];
@@ -46,7 +71,7 @@ struct process *process_create(const char *name, void (*entry)(void)) {
         return NULL;
 
     /* Allocate kernel stack with guard page */
-    void *guard_and_stack = kmalloc_page_aligned(PAGE_SIZE + PROCESS_STACK_SIZE);
+    void *guard_and_stack = process_alloc_kernel_stack();
     if (!guard_and_stack)
         return NULL;
     vmm_unmap_page((uint64_t)guard_and_stack);  /* Guard page */

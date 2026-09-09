@@ -110,5 +110,6 @@ struct process *process_find_zombie_child(uint32_t parent_pid);
 bool process_has_children(uint32_t parent_pid);
 struct process *process_alloc(void);
 int process_wait_for(uint32_t child_pid, int32_t *status);
+void *process_alloc_kernel_stack(void);
 
 #endif /* PROCESS_H */
